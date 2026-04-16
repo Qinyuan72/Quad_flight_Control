@@ -1,6 +1,6 @@
-# p_inner_loop_test_v1
+# Quad Flight Control
 
-`p_inner_loop_test_v1` is a narrow engineering harness for validating only the single-axis roll-rate inner loop:
+`Quad_flight_Control` is a narrow engineering harness for validating the roll/pitch inner-loop control path:
 
 `p_cmd -> P controller -> matrix mixer -> 4 KAL Play Position outputs`
 
@@ -59,13 +59,13 @@ Rotor tags:
 From the project root:
 
 ```powershell
-python -m p_inner_loop_test_v1.main
+python main.py
 ```
 
 Or directly:
 
 ```powershell
-python -u "c:\Develop\kPRC\ConnectionTest\p_inner_loop_test_v1\main.py"
+python -u "c:\Develop\kPRC\Quad_flight_Control\main.py"
 ```
 
 ## Typical workflow

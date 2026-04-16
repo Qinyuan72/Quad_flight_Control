@@ -1,27 +1,38 @@
 from __future__ import annotations
 
+import argparse
 import tkinter as tk
 
+from run_auto_mode import run_auto_mode
+
 if __package__ in {None, ""}:
-    import sys
-    from pathlib import Path
-
-    package_root = Path(__file__).resolve().parent.parent
-    if str(package_root) not in sys.path:
-        sys.path.insert(0, str(package_root))
-
-    from Control_loop_test_v1.gui.app_gui import RollRateTestApp
-    from Control_loop_test_v1.runtime.test_runtime import RollRateInnerLoopRuntime
+    from gui.app_gui import RollRateTestApp
+    from runtime.runtime_service import RuntimeService
+    from runtime.test_runtime import RollRateInnerLoopRuntime
 else:
     from .gui.app_gui import RollRateTestApp
+    from .runtime.runtime_service import RuntimeService
     from .runtime.test_runtime import RollRateInnerLoopRuntime
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Quad flight control harness")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--gui", action="store_true", help="run the Tkinter GUI")
+    mode.add_argument("--auto", action="store_true", help="run a minimal headless test flow")
+    return parser.parse_args()
+
+
+def build_service() -> RuntimeService:
+    return RuntimeService(RollRateInnerLoopRuntime())
+
 def main() -> None:
-    runtime = RollRateInnerLoopRuntime()
-    root = tk.Tk()
-    RollRateTestApp(root, runtime)
-    root.mainloop()
+    args = parse_args()
+    service = build_service()
+    if args.auto:
+        run_auto_mode(service)
+        return
+    run_gui_mode(service)
 
 
 if __name__ == "__main__":

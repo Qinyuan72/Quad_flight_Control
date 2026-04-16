@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from Control_loop_test_v1.data_api.models import Axes4, MixerCandidate, MotorCommand, RPM_MAX, RPM_MIN
+try:
+    from data_api.models import Axes4, MixerCandidate, MotorCommand, RPM_MAX, RPM_MIN
+except ImportError:
+    from ..data_api.models import Axes4, MixerCandidate, MotorCommand, RPM_MAX, RPM_MIN
 
 
 class MatrixMixer:

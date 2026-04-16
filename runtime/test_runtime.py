@@ -2,30 +2,56 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from Control_loop_test_v1.control.controller import (
-    AltitudeOuterLoopController,
-    CascadedAltitudeController,
-    CascadedRollPitchController,
-    AngleOuterLoopController,
-    RollPitchRatePController,
-    VerticalSpeedPController,
-)
-from Control_loop_test_v1.control.mixer import MatrixMixer
-from Control_loop_test_v1.control.mixer_presets import get_candidate, list_candidates
-from Control_loop_test_v1.data_api.krpc_bindings import KrpcQuadHardware
-from Control_loop_test_v1.data_api.models import (
-    AltitudeCommand,
-    AltitudeControlConfig,
-    AltitudeLoopOutput,
-    AngleCommand,
-    AngleOuterLoopConfig,
-    AngleOuterLoopOutput,
-    MotorCommand,
-    RollRateTelemetry,
-    RollRateTestCommand,
-    RollRateTestState,
-)
-from Control_loop_test_v1.data_api.telemetry import RollRateTelemetryReader
+try:
+    from control.controller import (
+        AltitudeOuterLoopController,
+        CascadedAltitudeController,
+        CascadedRollPitchController,
+        AngleOuterLoopController,
+        RollPitchRatePController,
+        VerticalSpeedPController,
+    )
+    from control.mixer import MatrixMixer
+    from control.mixer_presets import get_candidate, list_candidates
+    from data_api.krpc_bindings import KrpcQuadHardware
+    from data_api.models import (
+        AltitudeCommand,
+        AltitudeControlConfig,
+        AltitudeLoopOutput,
+        AngleCommand,
+        AngleOuterLoopConfig,
+        AngleOuterLoopOutput,
+        MotorCommand,
+        RollRateTelemetry,
+        RollRateTestCommand,
+        RollRateTestState,
+    )
+    from data_api.telemetry import RollRateTelemetryReader
+except ImportError:
+    from ..control.controller import (
+        AltitudeOuterLoopController,
+        CascadedAltitudeController,
+        CascadedRollPitchController,
+        AngleOuterLoopController,
+        RollPitchRatePController,
+        VerticalSpeedPController,
+    )
+    from ..control.mixer import MatrixMixer
+    from ..control.mixer_presets import get_candidate, list_candidates
+    from ..data_api.krpc_bindings import KrpcQuadHardware
+    from ..data_api.models import (
+        AltitudeCommand,
+        AltitudeControlConfig,
+        AltitudeLoopOutput,
+        AngleCommand,
+        AngleOuterLoopConfig,
+        AngleOuterLoopOutput,
+        MotorCommand,
+        RollRateTelemetry,
+        RollRateTestCommand,
+        RollRateTestState,
+    )
+    from ..data_api.telemetry import RollRateTelemetryReader
 
 
 class RollRateInnerLoopRuntime:
@@ -92,6 +118,7 @@ class RollRateInnerLoopRuntime:
         self.last_snapshot = RollRateTestState(
             command=self.command,
             angle_command=self.angle_command,
+            outer_loop_config=self.controller.angle_controller.config,
             altitude_command=self.altitude_command,
             altitude_control_config=self.altitude_config,
             mixer_name=self.current_mixer.name,
@@ -191,11 +218,21 @@ class RollRateInnerLoopRuntime:
     def get_mixer_names(self) -> list[str]:
         return list_candidates()
 
-    def step(self) -> RollRateTestState:
+    def step_once(self) -> RollRateTestState:
         return self._run_cycle(write_outputs=True, status="Step executed")
 
-    def preview(self) -> RollRateTestState:
+    def preview_once(self) -> RollRateTestState:
         return self._run_cycle(write_outputs=False, status="Feedback preview updated")
+
+    def step(self) -> RollRateTestState:
+        return self.step_once()
+
+    def preview(self) -> RollRateTestState:
+        return self.preview_once()
+
+    def record_background_error(self, message: str) -> RollRateTestState:
+        return self._refresh_snapshot(status=f"Loop error: {message}", last_error=message)
+
     def _refresh_live_snapshot(self, *, status: str) -> RollRateTestState:
         if self.hardware.is_connected() and self.telemetry.streams:
             return self._run_cycle(write_outputs=False, status=status)
@@ -375,6 +412,7 @@ class RollRateInnerLoopRuntime:
             telemetry=telemetry_value,
             controller=controller_value,
             angle_command=self.angle_command,
+            outer_loop_config=self.controller.angle_controller.config,
             outer_loop=outer_loop_value,
             outer_loop_running=self.outer_loop_running,
             altitude_command=self.altitude_command,

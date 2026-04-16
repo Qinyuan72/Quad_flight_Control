@@ -9,7 +9,7 @@
   },
   "angle_command": {
     "roll_cmd_deg": 0.0,
-    "pitch_cmd_deg": -5.0
+    "pitch_cmd_deg": 0.0
   },
   "outer_config": {
     "kp_roll_angle": -0.05,
@@ -18,7 +18,7 @@
   },
   "altitude_command": {
     "alt_cmd_m": -1.0,
-    "hover_throttle": 280.0
+    "hover_throttle": 277.0
   },
   "altitude_config": {
     "kp_alt": 0.0,

@@ -8,7 +8,7 @@ try:
 except ImportError:  # pragma: no cover - depends on local environment
     krpc = None
 
-from Control_loop_test_v1.data_api.models import DEFAULT_CONTROLLER_TAGS, DEFAULT_ROTOR_TAGS, BindingStatus, MotorCommand
+from .models import DEFAULT_CONTROLLER_TAGS, DEFAULT_ROTOR_TAGS, BindingStatus, MotorCommand
 
 
 class BindingError(RuntimeError):

@@ -2,14 +2,24 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from Control_loop_test_v1.data_api.models import (
-    AngleCommand,
-    AngleOuterLoopConfig,
-    AngleOuterLoopOutput,
-    ControllerResult,
-    RollRateTelemetry,
-    RollRateTestCommand,
-)
+try:
+    from data_api.models import (
+        AngleCommand,
+        AngleOuterLoopConfig,
+        AngleOuterLoopOutput,
+        ControllerResult,
+        RollRateTelemetry,
+        RollRateTestCommand,
+    )
+except ImportError:
+    from ..data_api.models import (
+        AngleCommand,
+        AngleOuterLoopConfig,
+        AngleOuterLoopOutput,
+        ControllerResult,
+        RollRateTelemetry,
+        RollRateTestCommand,
+    )
 
 
 @dataclass

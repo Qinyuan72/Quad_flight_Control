@@ -3,12 +3,22 @@ from __future__ import annotations
 import tkinter as tk
 from tkinter import messagebox, scrolledtext, ttk
 
-from Control_loop_test_v1.data_api.models import (
-    AngleCommand,
-    AngleOuterLoopConfig,
-    RPM_MAX,
-    RollRateTestCommand,
-)
+try:
+    from data_api.models import (
+        AngleCommand,
+        AngleOuterLoopConfig,
+        RPM_MAX,
+        RollRateTestCommand,
+    )
+    from runtime.test_runtime import RollRateInnerLoopRuntime
+except ImportError:
+    from ..data_api.models import (
+        AngleCommand,
+        AngleOuterLoopConfig,
+        RPM_MAX,
+        RollRateTestCommand,
+    )
+    from ..runtime.test_runtime import RollRateInnerLoopRuntime
 
 
 DEFAULT_STARTUP_COMMAND = RollRateTestCommand(
@@ -20,8 +30,8 @@ DEFAULT_STARTUP_COMMAND = RollRateTestCommand(
     output_limit=50.0,
 )
 DEFAULT_STARTUP_MIXER_NAME = "quad_x_roll_pitch_b"
-from Control_loop_test_v1.gui import gui_config
-from Control_loop_test_v1.runtime.test_runtime import RollRateInnerLoopRuntime
+
+from . import gui_config
 
 
 class RollRateTestApp:

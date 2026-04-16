@@ -1,59 +1,36 @@
 from __future__ import annotations
 
-import json
 import tkinter as tk
-from pathlib import Path
 from tkinter import messagebox, scrolledtext, ttk
 
-from Control_loop_test_v1.data_api.models import (
-    AltitudeCommand,
-    AltitudeControlConfig,
-    AngleCommand,
-    AngleOuterLoopConfig,
-    RPM_MAX,
-    RollRateTestCommand,
-)
-from Control_loop_test_v1.gui import gui_config
-from Control_loop_test_v1.runtime.test_runtime import RollRateInnerLoopRuntime
+try:
+    from data_api.models import (
+        AltitudeCommand,
+        AltitudeControlConfig,
+        AngleCommand,
+        AngleOuterLoopConfig,
+        RPM_MAX,
+        RollRateTestCommand,
+    )
+    from runtime.runtime_service import RuntimeService
+except ImportError:
+    from ..data_api.models import (
+        AltitudeCommand,
+        AltitudeControlConfig,
+        AngleCommand,
+        AngleOuterLoopConfig,
+        RPM_MAX,
+        RollRateTestCommand,
+    )
+    from ..runtime.runtime_service import RuntimeService
 
-
-DEFAULT_STARTUP_COMMAND = RollRateTestCommand(
-    base_rpm=288.0,
-    p_cmd_rad_s=0.0,
-    q_cmd_rad_s=0.0,
-    kp_p=40.0,
-    kp_q=40.0,
-    output_limit=50.0,
-)
-DEFAULT_STARTUP_OUTER_COMMAND = AngleCommand(
-    roll_cmd_deg=0.0,
-    pitch_cmd_deg=0.0,
-)
-DEFAULT_STARTUP_OUTER_CONFIG = AngleOuterLoopConfig(
-    kp_roll_angle=-0.05,
-    kp_pitch_angle=-0.05,
-    rate_limit_rad_s=1.0,
-)
-DEFAULT_STARTUP_ALTITUDE_COMMAND = AltitudeCommand(
-    alt_cmd_m=0.0,
-    hover_throttle=277.0,
-)
-DEFAULT_STARTUP_ALTITUDE_CONFIG = AltitudeControlConfig(
-    kp_alt=0.0,
-    vz_max=0.0,
-    kp_vz=30.0,
-    ki_vz=0.0,
-    throttle_min=150.0,
-    throttle_max=400.0,
-)
-DEFAULT_STARTUP_MIXER_NAME = "quad_x_roll_pitch_b"
-STARTUP_STATE_PATH = Path(__file__).with_name("startup_state.json")
+from . import gui_config
 
 
 class RollRateTestApp:
     """Tkinter GUI for the focused roll / pitch inner-loop test harness."""
 
-    def __init__(self, root: tk.Tk, runtime: RollRateInnerLoopRuntime) -> None:
+    def __init__(self, root: tk.Tk, runtime: RuntimeService) -> None:
         self.root = root
         self.runtime = runtime
         self._after_id: str | None = None
@@ -67,13 +44,12 @@ class RollRateTestApp:
         self.test_var = tk.StringVar(value="Stopped")
 
         snapshot = self.runtime.get_snapshot()
-        startup_state = self._load_startup_state()
-        startup_command = self._command_from_state(startup_state)
-        startup_outer_command = self._outer_command_from_state(startup_state)
-        startup_outer_config = self._outer_config_from_state(startup_state)
-        startup_altitude_command = self._altitude_command_from_state(startup_state)
-        startup_altitude_config = self._altitude_config_from_state(startup_state)
-        startup_mixer_name = str(startup_state.get("mixer_name", DEFAULT_STARTUP_MIXER_NAME))
+        startup_command = snapshot.command
+        startup_outer_command = snapshot.angle_command
+        startup_outer_config = snapshot.outer_loop_config
+        startup_altitude_command = snapshot.altitude_command
+        startup_altitude_config = snapshot.altitude_control_config
+        startup_mixer_name = snapshot.mixer_name
 
         self.base_rpm_var = tk.StringVar(value=f"{startup_command.base_rpm:.1f}")
         self.p_cmd_var = tk.StringVar(value=f"{startup_command.p_cmd_rad_s:.3f}")
@@ -155,121 +131,9 @@ class RollRateTestApp:
         self.motor_bars: dict[str, ttk.Progressbar] = {}
 
         self._build_ui()
-        self._apply_startup_defaults()
-        self._render_snapshot(self.runtime.get_snapshot())
+        self._render_snapshot(snapshot)
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self._schedule_loop()
-    def _load_startup_state(self) -> dict[str, object]:
-        if not STARTUP_STATE_PATH.exists():
-            return {}
-        try:
-            loaded = json.loads(STARTUP_STATE_PATH.read_text(encoding="utf-8"))
-        except Exception:
-            return {}
-        return loaded if isinstance(loaded, dict) else {}
-
-    def _command_from_state(self, state: dict[str, object]) -> RollRateTestCommand:
-        command = state.get("command", {}) if isinstance(state.get("command", {}), dict) else {}
-        return RollRateTestCommand(
-            base_rpm=float(command.get("base_rpm", DEFAULT_STARTUP_COMMAND.base_rpm)),
-            p_cmd_rad_s=float(command.get("p_cmd_rad_s", DEFAULT_STARTUP_COMMAND.p_cmd_rad_s)),
-            q_cmd_rad_s=float(command.get("q_cmd_rad_s", DEFAULT_STARTUP_COMMAND.q_cmd_rad_s)),
-            kp_p=float(command.get("kp_p", DEFAULT_STARTUP_COMMAND.kp_p)),
-            kp_q=float(command.get("kp_q", DEFAULT_STARTUP_COMMAND.kp_q)),
-            output_limit=float(command.get("output_limit", DEFAULT_STARTUP_COMMAND.output_limit)),
-        )
-
-    def _outer_command_from_state(self, state: dict[str, object]) -> AngleCommand:
-        angle_command = state.get("angle_command", {}) if isinstance(state.get("angle_command", {}), dict) else {}
-        return AngleCommand(
-            roll_cmd_deg=float(angle_command.get("roll_cmd_deg", DEFAULT_STARTUP_OUTER_COMMAND.roll_cmd_deg)),
-            pitch_cmd_deg=float(angle_command.get("pitch_cmd_deg", DEFAULT_STARTUP_OUTER_COMMAND.pitch_cmd_deg)),
-        )
-
-    def _outer_config_from_state(self, state: dict[str, object]) -> AngleOuterLoopConfig:
-        outer_config = state.get("outer_config", {}) if isinstance(state.get("outer_config", {}), dict) else {}
-        return AngleOuterLoopConfig(
-            kp_roll_angle=float(outer_config.get("kp_roll_angle", DEFAULT_STARTUP_OUTER_CONFIG.kp_roll_angle)),
-            kp_pitch_angle=float(outer_config.get("kp_pitch_angle", DEFAULT_STARTUP_OUTER_CONFIG.kp_pitch_angle)),
-            rate_limit_rad_s=float(outer_config.get("rate_limit_rad_s", DEFAULT_STARTUP_OUTER_CONFIG.rate_limit_rad_s)),
-        )
-
-    def _altitude_command_from_state(self, state: dict[str, object]) -> AltitudeCommand:
-        altitude_command = state.get("altitude_command", {}) if isinstance(state.get("altitude_command", {}), dict) else {}
-        return AltitudeCommand(
-            alt_cmd_m=float(altitude_command.get("alt_cmd_m", DEFAULT_STARTUP_ALTITUDE_COMMAND.alt_cmd_m)),
-            hover_throttle=float(altitude_command.get("hover_throttle", DEFAULT_STARTUP_ALTITUDE_COMMAND.hover_throttle)),
-        )
-
-    def _altitude_config_from_state(self, state: dict[str, object]) -> AltitudeControlConfig:
-        altitude_config = state.get("altitude_config", {}) if isinstance(state.get("altitude_config", {}), dict) else {}
-        return AltitudeControlConfig(
-            kp_alt=float(altitude_config.get("kp_alt", DEFAULT_STARTUP_ALTITUDE_CONFIG.kp_alt)),
-            vz_max=float(altitude_config.get("vz_max", DEFAULT_STARTUP_ALTITUDE_CONFIG.vz_max)),
-            kp_vz=float(altitude_config.get("kp_vz", DEFAULT_STARTUP_ALTITUDE_CONFIG.kp_vz)),
-            ki_vz=float(altitude_config.get("ki_vz", DEFAULT_STARTUP_ALTITUDE_CONFIG.ki_vz)),
-            throttle_min=float(altitude_config.get("throttle_min", DEFAULT_STARTUP_ALTITUDE_CONFIG.throttle_min)),
-            throttle_max=float(altitude_config.get("throttle_max", DEFAULT_STARTUP_ALTITUDE_CONFIG.throttle_max)),
-        )
-
-    def _persist_startup_state(self) -> None:
-        payload = {
-            "command": {
-                "base_rpm": self._parse_float(self.base_rpm_var.get()),
-                "p_cmd_rad_s": self._parse_float(self.p_cmd_var.get()),
-                "q_cmd_rad_s": self._parse_float(self.q_cmd_var.get()),
-                "kp_p": self._parse_float(self.kp_p_var.get()),
-                "kp_q": self._parse_float(self.kp_q_var.get()),
-                "output_limit": self._parse_float(self.output_limit_var.get()),
-            },
-            "angle_command": {
-                "roll_cmd_deg": self._parse_float(self.roll_cmd_deg_var.get()),
-                "pitch_cmd_deg": self._parse_float(self.pitch_cmd_deg_var.get()),
-            },
-            "outer_config": {
-                "kp_roll_angle": self._parse_float(self.kp_roll_angle_var.get()),
-                "kp_pitch_angle": self._parse_float(self.kp_pitch_angle_var.get()),
-                "rate_limit_rad_s": self._parse_float(self.angle_rate_limit_var.get()),
-            },
-            "altitude_command": {
-                "alt_cmd_m": self._parse_float(self.alt_cmd_m_var.get()),
-                "hover_throttle": self._parse_float(self.hover_throttle_var.get()),
-            },
-            "altitude_config": {
-                "kp_alt": self._parse_float(self.kp_alt_var.get()),
-                "vz_max": self._parse_float(self.vz_max_var.get()),
-                "kp_vz": self._parse_float(self.kp_vz_var.get()),
-                "ki_vz": self._parse_float(self.ki_vz_var.get()),
-                "throttle_min": self._parse_float(self.throttle_min_var.get()),
-                "throttle_max": self._parse_float(self.throttle_max_var.get()),
-            },
-            "mixer_name": self.mixer_name_var.get(),
-        }
-        try:
-            STARTUP_STATE_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        except Exception:
-            pass
-
-    def _apply_startup_defaults(self) -> None:
-        try:
-            self.apply_inner_loop_parameters()
-            self.apply_outer_loop_parameters()
-            self.apply_altitude_loop_parameters()
-        except Exception:
-            pass
-
-        try:
-            available_mixers = tuple(self.runtime.get_mixer_names())
-            if self.mixer_name_var.get() in available_mixers:
-                self.runtime.set_mixer_candidate(self.mixer_name_var.get())
-            elif DEFAULT_STARTUP_MIXER_NAME in available_mixers:
-                self.runtime.set_mixer_candidate(DEFAULT_STARTUP_MIXER_NAME)
-                self.mixer_name_var.set(DEFAULT_STARTUP_MIXER_NAME)
-            elif available_mixers:
-                self.mixer_name_var.set(str(available_mixers[0]))
-            self._persist_startup_state()
-        except Exception:
-            pass
 
     def _build_ui(self) -> None:
         outer = ttk.Frame(self.root, padding=10)
@@ -504,7 +368,6 @@ class RollRateTestApp:
             output_limit=self._parse_float(self.output_limit_var.get()),
         ))
         self.runtime.set_mixer_candidate(self.mixer_name_var.get())
-        self._persist_startup_state()
 
     def apply_outer_loop_parameters(self) -> None:
         self.runtime.set_angle_command(AngleCommand(
@@ -516,7 +379,6 @@ class RollRateTestApp:
             kp_pitch_angle=self._parse_float(self.kp_pitch_angle_var.get()),
             rate_limit_rad_s=self._parse_float(self.angle_rate_limit_var.get()),
         ))
-        self._persist_startup_state()
 
     def apply_altitude_loop_parameters(self) -> None:
         self.runtime.set_altitude_command(AltitudeCommand(
@@ -531,7 +393,6 @@ class RollRateTestApp:
             throttle_min=self._parse_float(self.throttle_min_var.get()),
             throttle_max=self._parse_float(self.throttle_max_var.get()),
         ))
-        self._persist_startup_state()
 
     def start_test(self) -> None:
         def _start() -> None:
@@ -574,15 +435,16 @@ class RollRateTestApp:
     def _update_loop(self) -> None:
         try:
             snapshot = self.runtime.get_snapshot()
-            if getattr(snapshot.binding, "test_running", False):
-                self.runtime.step()
-            elif getattr(snapshot.binding, "connected", False):
-                self.runtime.preview()
         except Exception as exc:
-            self.status_var.set(f"Loop error: {exc}")
-            self.runtime.stop_test()
+            self.status_var.set(f"Refresh error: {exc}")
             messagebox.showerror("Roll / Pitch Inner-Loop Test", str(exc))
-        self._render_snapshot(self.runtime.get_snapshot())
+            self._schedule_loop()
+            return
+
+        self._render_snapshot(snapshot)
+        pending_error = self.runtime.consume_pending_error()
+        if pending_error:
+            messagebox.showerror("Roll / Pitch Inner-Loop Test", pending_error)
         self._schedule_loop()
 
     def _render_snapshot(self, snapshot) -> None:
@@ -667,7 +529,6 @@ class RollRateTestApp:
             except Exception:
                 pass
         try:
-            self._persist_startup_state()
-            self.runtime.disconnect()
+            self.runtime.shutdown()
         finally:
             self.root.destroy()

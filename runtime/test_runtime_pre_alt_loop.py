@@ -2,20 +2,36 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from Control_loop_test_v1.control.controller import CascadedRollPitchController, AngleOuterLoopController, RollPitchRatePController
-from Control_loop_test_v1.control.mixer import MatrixMixer
-from Control_loop_test_v1.control.mixer_presets import get_candidate, list_candidates
-from Control_loop_test_v1.data_api.krpc_bindings import KrpcQuadHardware
-from Control_loop_test_v1.data_api.models import (
-    AngleCommand,
-    AngleOuterLoopConfig,
-    AngleOuterLoopOutput,
-    MotorCommand,
-    RollRateTelemetry,
-    RollRateTestCommand,
-    RollRateTestState,
-)
-from Control_loop_test_v1.data_api.telemetry import RollRateTelemetryReader
+try:
+    from control.controller import CascadedRollPitchController, AngleOuterLoopController, RollPitchRatePController
+    from control.mixer import MatrixMixer
+    from control.mixer_presets import get_candidate, list_candidates
+    from data_api.krpc_bindings import KrpcQuadHardware
+    from data_api.models import (
+        AngleCommand,
+        AngleOuterLoopConfig,
+        AngleOuterLoopOutput,
+        MotorCommand,
+        RollRateTelemetry,
+        RollRateTestCommand,
+        RollRateTestState,
+    )
+    from data_api.telemetry import RollRateTelemetryReader
+except ImportError:
+    from ..control.controller import CascadedRollPitchController, AngleOuterLoopController, RollPitchRatePController
+    from ..control.mixer import MatrixMixer
+    from ..control.mixer_presets import get_candidate, list_candidates
+    from ..data_api.krpc_bindings import KrpcQuadHardware
+    from ..data_api.models import (
+        AngleCommand,
+        AngleOuterLoopConfig,
+        AngleOuterLoopOutput,
+        MotorCommand,
+        RollRateTelemetry,
+        RollRateTestCommand,
+        RollRateTestState,
+    )
+    from ..data_api.telemetry import RollRateTelemetryReader
 
 
 class RollRateInnerLoopRuntime:

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from Control_loop_test_v1.data_api.models import Matrix4x4, MixerCandidate
+try:
+    from data_api.models import Matrix4x4, MixerCandidate
+except ImportError:
+    from ..data_api.models import Matrix4x4, MixerCandidate
 
 
 def _candidate(name: str, description: str, rows: Matrix4x4) -> MixerCandidate:
@@ -32,23 +35,22 @@ _PRESETS: dict[str, MixerCandidate] = {
         "quad_x_roll_neg_pitch_a",
         "Inverted roll column with candidate A pitch signs for combined sign debugging.",
         (
-            (1.0, -1.0, 1.0, 0.0),
             (1.0, 1.0, 1.0, 0.0),
-            (1.0, -1.0, -1.0, 0.0),
+            (1.0, -1.0, 1.0, 0.0),
             (1.0, 1.0, -1.0, 0.0),
+            (1.0, -1.0, -1.0, 0.0),
         ),
     ),
-    "quad_x_roll_neg_pitch_a": _candidate(
-        "quad_x_roll_neg",
-        "Inverted roll column with candidate A pitch signs for combined sign debugging.",
+    "quad_x_roll_only": _candidate(
+        "quad_x_roll_only",
+        "Roll-only debugging mixer with pitch contribution removed.",
         (
             (1.0, -1.0, 0.0, 0.0),
-            (1.0, 1.0, 1.0, 0.0),
+            (1.0, 1.0, 0.0, 0.0),
             (1.0, -1.0, 0.0, 0.0),
             (1.0, 1.0, 0.0, 0.0),
         ),
     ),
-    
 }
 
 

@@ -233,6 +233,7 @@ class RollRateTestState:
     controller: ControllerResult = field(default_factory=ControllerResult)
 
     angle_command: AngleCommand = field(default_factory=AngleCommand)
+    outer_loop_config: AngleOuterLoopConfig = field(default_factory=AngleOuterLoopConfig)
     outer_loop: AngleOuterLoopOutput = field(default_factory=AngleOuterLoopOutput)
     outer_loop_running: bool = False
 
@@ -251,4 +252,3 @@ class RollRateTestState:
 
     last_error: str = ""
     last_status: str = "Idle"
-

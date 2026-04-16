@@ -4,8 +4,8 @@ import math
 import time
 from typing import Any
 
-from Control_loop_test_v1.data_api.krpc_bindings import KrpcQuadHardware
-from Control_loop_test_v1.data_api.models import RollRateTelemetry
+from .krpc_bindings import KrpcQuadHardware
+from .models import RollRateTelemetry
 
 
 class RollRateTelemetryReader:
