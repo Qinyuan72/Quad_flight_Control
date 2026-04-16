@@ -1,0 +1,21 @@
+rows=motor outputs [FL, FR, RL, RR]
+cols=input vector [base, roll, pitch, yaw]
+
+name: quad_x_roll_pitch_b
+desc: Same roll column as candidate A, inverted pitch column for sign debugging.
+matrix:
+  FL: [ 1.00, -1.00, -1.00,  0.00]
+  FR: [ 1.00,  1.00, -1.00,  0.00]
+  RL: [ 1.00, -1.00,  1.00,  0.00]
+  RR: [ 1.00,  1.00,  1.00,  0.00]
+  Base 288
+  p_cmd = 0
+  q_cmd = 0
+  kp_p = 40
+  kp_q = 40
+  out_lim = 50
+  mixer： 
+    (1.0, -1.0, -1.0, 0.0),
+    (1.0, 1.0, -1.0, 0.0),
+    (1.0, -1.0, 1.0, 0.0),
+    (1.0, 1.0, 1.0, 0.0),

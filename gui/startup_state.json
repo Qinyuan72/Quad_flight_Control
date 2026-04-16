@@ -1,0 +1,32 @@
+{
+  "command": {
+    "base_rpm": 40.0,
+    "p_cmd_rad_s": 0.0,
+    "q_cmd_rad_s": 0.0,
+    "kp_p": 40.0,
+    "kp_q": 40.0,
+    "output_limit": 60.0
+  },
+  "angle_command": {
+    "roll_cmd_deg": 0.0,
+    "pitch_cmd_deg": -5.0
+  },
+  "outer_config": {
+    "kp_roll_angle": -0.05,
+    "kp_pitch_angle": -0.05,
+    "rate_limit_rad_s": 1.0
+  },
+  "altitude_command": {
+    "alt_cmd_m": -1.0,
+    "hover_throttle": 280.0
+  },
+  "altitude_config": {
+    "kp_alt": 0.0,
+    "vz_max": 0.0,
+    "kp_vz": 30.0,
+    "ki_vz": 0.0,
+    "throttle_min": 60.0,
+    "throttle_max": 400.0
+  },
+  "mixer_name": "quad_x_roll_pitch_b"
+}

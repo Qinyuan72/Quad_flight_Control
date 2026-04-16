@@ -1,0 +1,11 @@
+from __future__ import annotations
+
+WINDOW_TITLE = "Roll / Pitch Inner-Loop Test Harness"
+WINDOW_GEOMETRY = "1180x820"
+WINDOW_MIN_SIZE = (1280, 1000)
+GUI_STEP_MS = 100
+MATRIX_TEXT_HEIGHT = 9
+MATRIX_TEXT_WIDTH = 48
+NUMERIC_ENTRY_WIDTH = 12
+MONO_FONT = ("Consolas", 10)
+STATUS_FONT = ("Segoe UI", 10)

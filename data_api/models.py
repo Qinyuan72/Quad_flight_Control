@@ -1,0 +1,254 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Mapping
+
+
+# ============================================================================
+# Common type aliases and constants
+# ============================================================================
+
+Axes4 = tuple[float, float, float, float]
+Matrix4x4 = tuple[Axes4, Axes4, Axes4, Axes4]
+
+MOTOR_KEYS: tuple[str, str, str, str] = ("FL", "FR", "RL", "RR")
+
+RPM_MIN = 0.0
+RPM_MAX = 460.0
+
+DEFAULT_CONTROLLER_TAGS: Mapping[str, str] = {
+    "FL": "ControllerFL",
+    "FR": "ControllerFR",
+    "RL": "ControllerRL",
+    "RR": "ControllerRR",
+}
+
+DEFAULT_ROTOR_TAGS: Mapping[str, str] = {
+    "FL": "rotorFL",
+    "FR": "rotorFR",
+    "RL": "rotorRL",
+    "RR": "rotorRR",
+}
+
+
+# ============================================================================
+# Telemetry / command / controller data models
+# ============================================================================
+
+@dataclass(frozen=True)
+class RollRateTelemetry:
+    """Telemetry required for roll/pitch inner-loop, outer-loop, and altitude testing."""
+
+    p_meas_rad_s: float = 0.0
+    q_meas_rad_s: float = 0.0
+    r_meas_rad_s: float = 0.0
+
+    roll_deg: float = 0.0
+    pitch_deg: float = 0.0
+    heading_deg: float = 0.0
+
+    roll_rate_deg_s: float = 0.0
+    pitch_rate_deg_s: float = 0.0
+    yaw_rate_deg_s: float = 0.0
+
+    alt_m: float = 0.0
+    vz_m_s: float = 0.0
+
+    body_rates_rfd_rad_s: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    body_rates_frd_rad_s: tuple[float, float, float] = (0.0, 0.0, 0.0)
+
+    timestamp_s: float = 0.0
+    dt_s: float = 0.0
+
+
+@dataclass(frozen=True)
+class RollRateTestCommand:
+    """User-editable command for direct roll/pitch rate inner-loop testing."""
+
+    base_rpm: float = 0.0
+    p_cmd_rad_s: float = 0.0
+    q_cmd_rad_s: float = 0.0
+    kp_p: float = 0.0
+    kp_q: float = 0.0
+    output_limit: float = 0.0
+
+
+@dataclass(frozen=True)
+class ControllerResult:
+    """Output of the P-only roll/pitch rate inner-loop controller."""
+
+    error_p_rad_s: float = 0.0
+    error_q_rad_s: float = 0.0
+    u_roll: float = 0.0
+    u_pitch: float = 0.0
+
+
+# ============================================================================
+# Outer-loop angle control models
+# ============================================================================
+
+@dataclass(frozen=True)
+class AngleCommand:
+    """User-commanded roll/pitch angle targets."""
+
+    roll_cmd_deg: float = 0.0
+    pitch_cmd_deg: float = 0.0
+
+
+@dataclass(frozen=True)
+class AngleOuterLoopConfig:
+    """
+    P-only angle outer-loop configuration.
+
+    kp_*_angle unit:
+        rad/s per deg
+    """
+
+    kp_roll_angle: float = 0.08
+    kp_pitch_angle: float = 0.08
+    rate_limit_rad_s: float = 1.0
+
+
+@dataclass(frozen=True)
+class AngleOuterLoopOutput:
+    """Outer-loop output: angle error and generated body-rate commands."""
+
+    roll_error_deg: float = 0.0
+    pitch_error_deg: float = 0.0
+    p_cmd_rad_s: float = 0.0
+    q_cmd_rad_s: float = 0.0
+
+
+@dataclass(frozen=True)
+class OuterLoopState:
+    """Latest roll/pitch outer-loop state for GUI/debug display."""
+
+    roll_error_deg: float = 0.0
+    pitch_error_deg: float = 0.0
+    p_cmd_from_angle_rad_s: float = 0.0
+    q_cmd_from_angle_rad_s: float = 0.0
+
+
+# ============================================================================
+# Altitude-loop control models
+# ============================================================================
+
+@dataclass(frozen=True)
+class AltitudeCommand:
+    """User-commanded altitude target and hover collective."""
+
+    alt_cmd_m: float = 0.0
+    hover_throttle: float = 0.0
+
+
+@dataclass(frozen=True)
+class AltitudeControlConfig:
+    """Altitude outer-loop and vertical-speed inner-loop configuration."""
+
+    kp_alt: float = 0.0
+    vz_max: float = 0.0
+    kp_vz: float = 0.0
+    ki_vz: float = 0.0
+    throttle_min: float = 0.0
+    throttle_max: float = RPM_MAX
+
+
+@dataclass(frozen=True)
+class AltitudeLoopOutput:
+    """Latest altitude-loop state for GUI/debug display."""
+
+    alt_cmd_m: float = 0.0
+    alt_m: float = 0.0
+    vz_m_s: float = 0.0
+    alt_error_m: float = 0.0
+    vz_cmd_m_s: float = 0.0
+    vz_error_m_s: float = 0.0
+    throttle_correction: float = 0.0
+    throttle_cmd: float = 0.0
+    integrator_state: float = 0.0
+
+
+# ============================================================================
+# Mixer / motor / binding state
+# ============================================================================
+
+@dataclass(frozen=True)
+class MotorCommand:
+    """Per-motor RPM commands written through the KAL controllers."""
+
+    fl_rpm: float = 0.0
+    fr_rpm: float = 0.0
+    rl_rpm: float = 0.0
+    rr_rpm: float = 0.0
+
+    def as_mapping(self) -> dict[str, float]:
+        return {
+            "FL": self.fl_rpm,
+            "FR": self.fr_rpm,
+            "RL": self.rl_rpm,
+            "RR": self.rr_rpm,
+        }
+
+
+@dataclass(frozen=True)
+class MixerCandidate:
+    """Matrix-based mixer candidate for base/roll/pitch/yaw to four motors."""
+
+    name: str
+    description: str
+    matrix: Matrix4x4
+
+
+@dataclass(frozen=True)
+class BindingStatus:
+    """High-level hardware/binding state for the GUI."""
+
+    connected: bool = False
+    bound: bool = False
+    initialized: bool = False
+    test_running: bool = False
+
+    vessel_name: str = "-"
+
+    controller_tags: Mapping[str, str] = field(
+        default_factory=lambda: dict(DEFAULT_CONTROLLER_TAGS)
+    )
+    rotor_tags: Mapping[str, str] = field(
+        default_factory=lambda: dict(DEFAULT_ROTOR_TAGS)
+    )
+
+
+# ============================================================================
+# Top-level GUI/app state
+# ============================================================================
+
+@dataclass(frozen=True)
+class RollRateTestState:
+    """Single GUI snapshot: hardware, telemetry, control, and outputs."""
+
+    binding: BindingStatus = field(default_factory=BindingStatus)
+
+    command: RollRateTestCommand = field(default_factory=RollRateTestCommand)
+    telemetry: RollRateTelemetry = field(default_factory=RollRateTelemetry)
+    controller: ControllerResult = field(default_factory=ControllerResult)
+
+    angle_command: AngleCommand = field(default_factory=AngleCommand)
+    outer_loop: AngleOuterLoopOutput = field(default_factory=AngleOuterLoopOutput)
+    outer_loop_running: bool = False
+
+    altitude_command: AltitudeCommand = field(default_factory=AltitudeCommand)
+    altitude_control_config: AltitudeControlConfig = field(default_factory=AltitudeControlConfig)
+    altitude_loop: AltitudeLoopOutput = field(default_factory=AltitudeLoopOutput)
+    altitude_loop_running: bool = False
+
+    motor_command: MotorCommand = field(default_factory=MotorCommand)
+
+    mixer_name: str = "quad_x_roll_pitch_a"
+    mixer_matrix_text: str = ""
+
+    controller_tags_bound: Mapping[str, str] = field(default_factory=dict)
+    rotor_tags_bound: Mapping[str, str] = field(default_factory=dict)
+
+    last_error: str = ""
+    last_status: str = "Idle"
+
