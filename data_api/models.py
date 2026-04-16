@@ -63,24 +63,28 @@ class RollRateTelemetry:
 
 @dataclass(frozen=True)
 class RollRateTestCommand:
-    """User-editable command for direct roll/pitch rate inner-loop testing."""
+    """User-editable command for direct body-rate inner-loop testing."""
 
     base_rpm: float = 0.0
     p_cmd_rad_s: float = 0.0
     q_cmd_rad_s: float = 0.0
+    r_cmd_rad_s: float = 0.0
     kp_p: float = 0.0
     kp_q: float = 0.0
+    kp_r: float = 0.0
     output_limit: float = 0.0
 
 
 @dataclass(frozen=True)
 class ControllerResult:
-    """Output of the P-only roll/pitch rate inner-loop controller."""
+    """Output of the P-only body-rate inner-loop controller."""
 
     error_p_rad_s: float = 0.0
     error_q_rad_s: float = 0.0
+    error_r_rad_s: float = 0.0
     u_roll: float = 0.0
     u_pitch: float = 0.0
+    u_yaw: float = 0.0
 
 
 # ============================================================================

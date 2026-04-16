@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 try:
-    from data_api.models import Axes4, MixerCandidate, MotorCommand, RPM_MAX, RPM_MIN
+    from data_api.models import Axes4, MOTOR_KEYS, MixerCandidate, MotorCommand, RPM_MAX, RPM_MIN
 except ImportError:
-    from ..data_api.models import Axes4, MixerCandidate, MotorCommand, RPM_MAX, RPM_MIN
+    from ..data_api.models import Axes4, MOTOR_KEYS, MixerCandidate, MotorCommand, RPM_MAX, RPM_MIN
 
 
 class MatrixMixer:
@@ -16,8 +16,9 @@ class MatrixMixer:
         base_rpm: float,
         u_roll: float,
         u_pitch: float,
+        u_yaw: float,
     ) -> MotorCommand:
-        control_vector = (float(base_rpm), float(u_roll), float(u_pitch), 0.0)
+        control_vector = (float(base_rpm), float(u_roll), float(u_pitch), float(u_yaw))
         outputs = [self._dot(row, control_vector) for row in candidate.matrix]
         clipped = [self._clip_rpm(value) for value in outputs]
         return MotorCommand(
@@ -42,3 +43,45 @@ class MatrixMixer:
 
     def _clip_rpm(self, value: float) -> float:
         return max(RPM_MIN, min(RPM_MAX, float(value)))
+
+
+def check_yaw_sign_consistency(
+    *,
+    r_cmd_rad_s: float,
+    r_meas_rad_s: float,
+    u_yaw: float,
+    candidate: MixerCandidate,
+    motor_outputs: MotorCommand,
+) -> dict[str, object]:
+    yaw_error = float(r_cmd_rad_s) - float(r_meas_rad_s)
+    yaw_error_sign = _sign(yaw_error)
+    u_yaw_sign = _sign(u_yaw)
+    yaw_column = {key: row[3] for key, row in zip(MOTOR_KEYS, candidate.matrix)}
+    motor_mapping = motor_outputs.as_mapping()
+    positive_group_sum = sum(motor_mapping[key] for key, coeff in yaw_column.items() if coeff > 0.0)
+    negative_group_sum = sum(motor_mapping[key] for key, coeff in yaw_column.items() if coeff < 0.0)
+    yaw_differential = positive_group_sum - negative_group_sum
+    yaw_differential_sign = _sign(yaw_differential)
+
+    command_sign_matches = yaw_error_sign == 0 or u_yaw_sign == yaw_error_sign
+    motor_sign_matches = u_yaw_sign == 0 or yaw_differential_sign == u_yaw_sign
+
+    return {
+        "pass": command_sign_matches and motor_sign_matches,
+        "yaw_error": yaw_error,
+        "u_yaw": u_yaw,
+        "yaw_differential": yaw_differential,
+        "positive_group_sum": positive_group_sum,
+        "negative_group_sum": negative_group_sum,
+        "yaw_column": yaw_column,
+        "command_sign_matches": command_sign_matches,
+        "motor_sign_matches": motor_sign_matches,
+    }
+
+
+def _sign(value: float, *, tol: float = 1e-9) -> int:
+    if value > tol:
+        return 1
+    if value < -tol:
+        return -1
+    return 0

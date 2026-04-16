@@ -199,8 +199,10 @@ class RuntimeService:
                 base_rpm=float(command.get("base_rpm", 0.0)),
                 p_cmd_rad_s=float(command.get("p_cmd_rad_s", 0.0)),
                 q_cmd_rad_s=float(command.get("q_cmd_rad_s", 0.0)),
+                r_cmd_rad_s=float(command.get("r_cmd_rad_s", 0.0)),
                 kp_p=float(command.get("kp_p", 0.0)),
                 kp_q=float(command.get("kp_q", 0.0)),
+                kp_r=float(command.get("kp_r", 0.0)),
                 output_limit=float(command.get("output_limit", 0.0)),
             )
         )
@@ -259,8 +261,10 @@ class RuntimeService:
                     "base_rpm": snapshot.command.base_rpm,
                     "p_cmd_rad_s": snapshot.command.p_cmd_rad_s,
                     "q_cmd_rad_s": snapshot.command.q_cmd_rad_s,
+                    "r_cmd_rad_s": snapshot.command.r_cmd_rad_s,
                     "kp_p": snapshot.command.kp_p,
                     "kp_q": snapshot.command.kp_q,
+                    "kp_r": snapshot.command.kp_r,
                     "output_limit": snapshot.command.output_limit,
                 },
                 "angle_command": {

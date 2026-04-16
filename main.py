@@ -26,6 +26,16 @@ def parse_args() -> argparse.Namespace:
 def build_service() -> RuntimeService:
     return RuntimeService(RollRateInnerLoopRuntime())
 
+
+def run_gui_mode(service: RuntimeService) -> None:
+    service.startup()
+    root = tk.Tk()
+    try:
+        RollRateTestApp(root, service)
+        root.mainloop()
+    finally:
+        service.shutdown()
+
 def main() -> None:
     args = parse_args()
     service = build_service()

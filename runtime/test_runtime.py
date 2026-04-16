@@ -11,7 +11,7 @@ try:
         RollPitchRatePController,
         VerticalSpeedPController,
     )
-    from control.mixer import MatrixMixer
+    from control.mixer import MatrixMixer, check_yaw_sign_consistency
     from control.mixer_presets import get_candidate, list_candidates
     from data_api.krpc_bindings import KrpcQuadHardware
     from data_api.models import (
@@ -36,7 +36,7 @@ except ImportError:
         RollPitchRatePController,
         VerticalSpeedPController,
     )
-    from ..control.mixer import MatrixMixer
+    from ..control.mixer import MatrixMixer, check_yaw_sign_consistency
     from ..control.mixer_presets import get_candidate, list_candidates
     from ..data_api.krpc_bindings import KrpcQuadHardware
     from ..data_api.models import (
@@ -97,8 +97,10 @@ class RollRateInnerLoopRuntime:
             base_rpm=0.0,
             p_cmd_rad_s=0.0,
             q_cmd_rad_s=0.0,
+            r_cmd_rad_s=0.0,
             kp_p=0.0,
             kp_q=0.0,
+            kp_r=0.0,
             output_limit=0.0,
         )
         self.angle_command = AngleCommand()
@@ -194,22 +196,22 @@ class RollRateInnerLoopRuntime:
 
     def set_altitude_command(self, altitude_command: AltitudeCommand) -> None:
         self.altitude_command = altitude_command
-        self._refresh_live_snapshot(status="Vertical-speed target updated")
+        self._refresh_live_snapshot(status="Altitude target updated")
 
     def set_altitude_config(self, config: AltitudeControlConfig) -> None:
         self.altitude_config = config
         self.altitude_controller.set_config(config)
-        self._refresh_live_snapshot(status="Vertical-speed gains updated")
+        self._refresh_live_snapshot(status="Altitude-loop gains updated")
 
     def start_altitude_loop(self) -> None:
         self.altitude_controller.reset()
         self.altitude_loop_running = True
-        self._refresh_live_snapshot(status="Vertical-speed loop enabled")
+        self._refresh_live_snapshot(status="Altitude loop enabled")
 
     def stop_altitude_loop(self) -> None:
         self.altitude_loop_running = False
         self.altitude_controller.reset()
-        self._refresh_live_snapshot(status="Vertical-speed loop disabled")
+        self._refresh_live_snapshot(status="Altitude loop disabled")
 
     def set_mixer_candidate(self, name: str) -> None:
         self.current_mixer = get_candidate(name)
@@ -247,6 +249,7 @@ class RollRateInnerLoopRuntime:
             base_rpm=collective_cmd,
             u_roll=controller_result.u_roll,
             u_pitch=controller_result.u_pitch,
+            u_yaw=controller_result.u_yaw,
         )
         if write_outputs:
             self.hardware.write_motor_command(motor_command)
@@ -271,10 +274,13 @@ class RollRateInnerLoopRuntime:
         controller_result = self.controller.rate_controller.compute(
             p_cmd_rad_s=self.command.p_cmd_rad_s,
             q_cmd_rad_s=self.command.q_cmd_rad_s,
+            r_cmd_rad_s=self.command.r_cmd_rad_s,
             p_meas_rad_s=telemetry.p_meas_rad_s,
             q_meas_rad_s=telemetry.q_meas_rad_s,
+            r_meas_rad_s=telemetry.r_meas_rad_s,
             kp_p=self.command.kp_p,
             kp_q=self.command.kp_q,
+            kp_r=self.command.kp_r,
             output_limit=self.command.output_limit,
         )
         return (outer_loop, controller_result)
@@ -293,6 +299,7 @@ class RollRateInnerLoopRuntime:
             base_rpm=max(0.0, self.command.base_rpm),
             kp_p=1.0 if self.command.kp_p == 0.0 else self.command.kp_p,
             kp_q=1.0 if self.command.kp_q == 0.0 else self.command.kp_q,
+            kp_r=1.0 if self.command.kp_r == 0.0 else self.command.kp_r,
             output_limit=10.0 if self.command.output_limit <= 0.0 else self.command.output_limit,
         )
         test_config = AngleOuterLoopConfig(
@@ -340,49 +347,156 @@ class RollRateInnerLoopRuntime:
             },
         }
 
+    def run_yaw_rate_self_check(self) -> dict[str, object]:
+        test_command = replace(
+            self.command,
+            base_rpm=max(50.0, self.command.base_rpm),
+            p_cmd_rad_s=0.0,
+            q_cmd_rad_s=0.0,
+            r_cmd_rad_s=0.2,
+            kp_p=0.0,
+            kp_q=0.0,
+            kp_r=40.0 if self.command.kp_r == 0.0 else self.command.kp_r,
+            output_limit=60.0 if self.command.output_limit <= 0.0 else self.command.output_limit,
+        )
+        case_positive = self.controller.rate_controller.compute(
+            p_cmd_rad_s=0.0,
+            q_cmd_rad_s=0.0,
+            r_cmd_rad_s=test_command.r_cmd_rad_s,
+            p_meas_rad_s=0.0,
+            q_meas_rad_s=0.0,
+            r_meas_rad_s=0.0,
+            kp_p=0.0,
+            kp_q=0.0,
+            kp_r=test_command.kp_r,
+            output_limit=test_command.output_limit,
+        )
+        case_near = self.controller.rate_controller.compute(
+            p_cmd_rad_s=0.0,
+            q_cmd_rad_s=0.0,
+            r_cmd_rad_s=test_command.r_cmd_rad_s,
+            p_meas_rad_s=0.0,
+            q_meas_rad_s=0.0,
+            r_meas_rad_s=0.15,
+            kp_p=0.0,
+            kp_q=0.0,
+            kp_r=test_command.kp_r,
+            output_limit=test_command.output_limit,
+        )
+        case_negative = self.controller.rate_controller.compute(
+            p_cmd_rad_s=0.0,
+            q_cmd_rad_s=0.0,
+            r_cmd_rad_s=-0.2,
+            p_meas_rad_s=0.0,
+            q_meas_rad_s=0.0,
+            r_meas_rad_s=0.0,
+            kp_p=0.0,
+            kp_q=0.0,
+            kp_r=test_command.kp_r,
+            output_limit=test_command.output_limit,
+        )
+        positive_motor = self.mixer.mix(
+            candidate=self.current_mixer,
+            base_rpm=test_command.base_rpm,
+            u_roll=0.0,
+            u_pitch=0.0,
+            u_yaw=case_positive.u_yaw,
+        )
+        negative_motor = self.mixer.mix(
+            candidate=self.current_mixer,
+            base_rpm=test_command.base_rpm,
+            u_roll=0.0,
+            u_pitch=0.0,
+            u_yaw=case_negative.u_yaw,
+        )
+        positive_sign = check_yaw_sign_consistency(
+            r_cmd_rad_s=test_command.r_cmd_rad_s,
+            r_meas_rad_s=0.0,
+            u_yaw=case_positive.u_yaw,
+            candidate=self.current_mixer,
+            motor_outputs=positive_motor,
+        )
+        negative_sign = check_yaw_sign_consistency(
+            r_cmd_rad_s=-0.2,
+            r_meas_rad_s=0.0,
+            u_yaw=case_negative.u_yaw,
+            candidate=self.current_mixer,
+            motor_outputs=negative_motor,
+        )
+        return {
+            "case_positive": {
+                "error_r_rad_s": case_positive.error_r_rad_s,
+                "u_yaw": case_positive.u_yaw,
+                "pass": case_positive.error_r_rad_s > 0.0 and case_positive.u_yaw > 0.0,
+                "sign_check": positive_sign,
+            },
+            "case_near_target": {
+                "error_r_rad_s": case_near.error_r_rad_s,
+                "u_yaw": case_near.u_yaw,
+                "pass": abs(case_near.error_r_rad_s) < abs(case_positive.error_r_rad_s) and abs(case_near.u_yaw) < abs(case_positive.u_yaw),
+            },
+            "case_negative": {
+                "error_r_rad_s": case_negative.error_r_rad_s,
+                "u_yaw": case_negative.u_yaw,
+                "pass": case_negative.error_r_rad_s < 0.0 and case_negative.u_yaw < 0.0,
+                "sign_check": negative_sign,
+            },
+            "sign_flip": {
+                "pass": case_positive.u_yaw > 0.0 and case_negative.u_yaw < 0.0 and positive_sign["pass"] and negative_sign["pass"],
+                "positive_motors": positive_motor.as_mapping(),
+                "negative_motors": negative_motor.as_mapping(),
+            },
+        }
+
     def run_altitude_loop_self_check(self) -> dict[str, object]:
         test_config = AltitudeControlConfig(
-            kp_alt=0.0,
-            vz_max=0.0,
+            kp_alt=1.0,
+            vz_max=2.0,
             kp_vz=10.0,
             ki_vz=0.0,
             throttle_min=0.0,
             throttle_max=460.0,
         )
         case_climb = self.altitude_controller.compute(
-            telemetry=RollRateTelemetry(vz_m_s=0.0, dt_s=0.1),
+            telemetry=RollRateTelemetry(alt_m=0.0, vz_m_s=0.0, dt_s=0.1),
             altitude_command=AltitudeCommand(alt_cmd_m=2.0, hover_throttle=220.0),
             config=test_config,
         )
         case_near = self.altitude_controller.compute(
-            telemetry=RollRateTelemetry(vz_m_s=1.5, dt_s=0.1),
+            telemetry=RollRateTelemetry(alt_m=1.5, vz_m_s=0.5, dt_s=0.1),
             altitude_command=AltitudeCommand(alt_cmd_m=2.0, hover_throttle=220.0),
             config=test_config,
         )
         case_descend = self.altitude_controller.compute(
-            telemetry=RollRateTelemetry(vz_m_s=0.0, dt_s=0.1),
-            altitude_command=AltitudeCommand(alt_cmd_m=-2.0, hover_throttle=220.0),
+            telemetry=RollRateTelemetry(alt_m=2.0, vz_m_s=0.0, dt_s=0.1),
+            altitude_command=AltitudeCommand(alt_cmd_m=0.0, hover_throttle=220.0),
             config=test_config,
         )
         return {
             "case_climb": {
+                "alt_cmd_m": case_climb.alt_cmd_m,
+                "alt_error_m": case_climb.alt_error_m,
                 "vz_cmd_m_s": case_climb.vz_cmd_m_s,
                 "vz_error_m_s": case_climb.vz_error_m_s,
                 "throttle_cmd": case_climb.throttle_cmd,
                 "hover_throttle": 220.0,
-                "pass": case_climb.vz_cmd_m_s > 0.0 and case_climb.vz_error_m_s > 0.0 and case_climb.throttle_cmd > 220.0,
+                "pass": case_climb.alt_error_m > 0.0 and case_climb.vz_cmd_m_s > 0.0 and case_climb.vz_error_m_s > 0.0 and case_climb.throttle_cmd > 220.0,
             },
             "case_near_target": {
+                "alt_error_m": case_near.alt_error_m,
+                "vz_cmd_m_s": case_near.vz_cmd_m_s,
                 "vz_error_m_s": case_near.vz_error_m_s,
                 "throttle_cmd": case_near.throttle_cmd,
-                "pass": abs(case_near.vz_error_m_s) < abs(case_climb.vz_error_m_s) and abs(case_near.throttle_cmd - 220.0) < abs(case_climb.throttle_cmd - 220.0),
+                "pass": abs(case_near.alt_error_m) < abs(case_climb.alt_error_m) and abs(case_near.vz_cmd_m_s) < abs(case_climb.vz_cmd_m_s) and abs(case_near.throttle_cmd - 220.0) < abs(case_climb.throttle_cmd - 220.0),
             },
             "case_descend": {
+                "alt_cmd_m": case_descend.alt_cmd_m,
+                "alt_error_m": case_descend.alt_error_m,
                 "vz_cmd_m_s": case_descend.vz_cmd_m_s,
                 "vz_error_m_s": case_descend.vz_error_m_s,
                 "throttle_cmd": case_descend.throttle_cmd,
                 "hover_throttle": 220.0,
-                "pass": case_descend.vz_cmd_m_s < 0.0 and case_descend.vz_error_m_s < 0.0 and case_descend.throttle_cmd < 220.0,
+                "pass": case_descend.alt_error_m < 0.0 and case_descend.vz_cmd_m_s < 0.0 and case_descend.vz_error_m_s < 0.0 and case_descend.throttle_cmd < 220.0,
             },
         }
 

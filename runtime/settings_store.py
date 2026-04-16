@@ -14,8 +14,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "base_rpm": 288.0,
         "p_cmd_rad_s": 0.0,
         "q_cmd_rad_s": 0.0,
+        "r_cmd_rad_s": 0.0,
         "kp_p": 40.0,
         "kp_q": 40.0,
+        "kp_r": 40.0,
         "output_limit": 50.0,
     },
     "angle_command": {

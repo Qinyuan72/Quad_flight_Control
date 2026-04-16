@@ -1,10 +1,12 @@
 {
   "command": {
-    "base_rpm": 40.0,
+    "base_rpm": 50.0,
     "p_cmd_rad_s": 0.0,
     "q_cmd_rad_s": 0.0,
+    "r_cmd_rad_s": -0.2,
     "kp_p": 40.0,
     "kp_q": 40.0,
+    "kp_r": 40.0,
     "output_limit": 60.0
   },
   "angle_command": {
@@ -17,13 +19,13 @@
     "rate_limit_rad_s": 1.0
   },
   "altitude_command": {
-    "alt_cmd_m": -1.0,
-    "hover_throttle": 277.0
+    "alt_cmd_m": 71.0,
+    "hover_throttle": 290.0
   },
   "altitude_config": {
-    "kp_alt": 0.0,
-    "vz_max": 0.0,
-    "kp_vz": 30.0,
+    "kp_alt": 0.5,
+    "vz_max": 5.0,
+    "kp_vz": 20.0,
     "ki_vz": 0.0,
     "throttle_min": 60.0,
     "throttle_max": 400.0

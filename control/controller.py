@@ -30,38 +30,47 @@ except ImportError:
 
 @dataclass
 class RollPitchRatePController:
-    """P-only roll/pitch inner-loop controller for sign and gain testing."""
+    """P-only body-rate inner-loop controller for sign and gain testing."""
 
     def compute(
         self,
         *,
         p_cmd_rad_s: float,
         q_cmd_rad_s: float,
+        r_cmd_rad_s: float,
         p_meas_rad_s: float,
         q_meas_rad_s: float,
+        r_meas_rad_s: float,
         kp_p: float,
         kp_q: float,
+        kp_r: float,
         output_limit: float,
     ) -> ControllerResult:
         error_p = float(p_cmd_rad_s) - float(p_meas_rad_s)
         error_q = float(q_cmd_rad_s) - float(q_meas_rad_s)
+        error_r = float(r_cmd_rad_s) - float(r_meas_rad_s)
         limit = abs(float(output_limit))
 
         raw_u_roll = float(kp_p) * error_p
         raw_u_pitch = float(kp_q) * error_q
+        raw_u_yaw = float(kp_r) * error_r
 
         if limit <= 0.0:
             u_roll = 0.0
             u_pitch = 0.0
+            u_yaw = 0.0
         else:
             u_roll = max(-limit, min(limit, raw_u_roll))
             u_pitch = max(-limit, min(limit, raw_u_pitch))
+            u_yaw = max(-limit, min(limit, raw_u_yaw))
 
         return ControllerResult(
             error_p_rad_s=error_p,
             error_q_rad_s=error_q,
+            error_r_rad_s=error_r,
             u_roll=u_roll,
             u_pitch=u_pitch,
+            u_yaw=u_yaw,
         )
 
 
@@ -165,10 +174,13 @@ class CascadedRollPitchController:
         controller_result = self.rate_controller.compute(
             p_cmd_rad_s=outer_loop.p_cmd_rad_s,
             q_cmd_rad_s=outer_loop.q_cmd_rad_s,
+            r_cmd_rad_s=rate_command.r_cmd_rad_s,
             p_meas_rad_s=telemetry.p_meas_rad_s,
             q_meas_rad_s=telemetry.q_meas_rad_s,
+            r_meas_rad_s=telemetry.r_meas_rad_s,
             kp_p=rate_command.kp_p,
             kp_q=rate_command.kp_q,
+            kp_r=rate_command.kp_r,
             output_limit=rate_command.output_limit,
         )
         return (outer_loop, controller_result)
@@ -191,7 +203,7 @@ class CascadedRollPitchController:
 
 @dataclass
 class CascadedAltitudeController:
-    """Current stage: direct vertical-speed command plus P collective control."""
+    """Altitude outer loop feeding a vertical-speed inner loop."""
 
     altitude_outer_controller: AltitudeOuterLoopController
     vertical_speed_controller: VerticalSpeedPController
@@ -210,8 +222,13 @@ class CascadedAltitudeController:
         altitude_command: AltitudeCommand,
         config: AltitudeControlConfig | None = None,
     ) -> AltitudeLoopOutput:
+        outer_controller = AltitudeOuterLoopController(config=config) if config is not None else self.altitude_outer_controller
         inner_controller = VerticalSpeedPController(config=config) if config is not None else self.vertical_speed_controller
-        vz_cmd_m_s = float(altitude_command.alt_cmd_m)
+        alt_cmd_m = float(altitude_command.alt_cmd_m)
+        alt_error_m, vz_cmd_m_s = outer_controller.compute(
+            alt_cmd_m=alt_cmd_m,
+            alt_m=telemetry.alt_m,
+        )
         vz_error_m_s, throttle_correction, throttle_cmd = inner_controller.compute(
             vz_cmd_m_s=vz_cmd_m_s,
             vz_m_s=telemetry.vz_m_s,
@@ -219,10 +236,10 @@ class CascadedAltitudeController:
         )
 
         return AltitudeLoopOutput(
-            alt_cmd_m=vz_cmd_m_s,
+            alt_cmd_m=alt_cmd_m,
             alt_m=telemetry.alt_m,
             vz_m_s=telemetry.vz_m_s,
-            alt_error_m=0.0,
+            alt_error_m=alt_error_m,
             vz_cmd_m_s=vz_cmd_m_s,
             vz_error_m_s=vz_error_m_s,
             throttle_correction=throttle_correction,

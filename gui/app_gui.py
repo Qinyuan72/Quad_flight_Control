@@ -229,15 +229,15 @@ class RollRateTestApp:
         info.columnconfigure(1, weight=1)
 
     def _build_altitude_loop_controls(self, parent: ttk.Frame) -> None:
-        frame = ttk.LabelFrame(parent, text="Vertical Speed Loop Controls", padding=8)
+        frame = ttk.LabelFrame(parent, text="Altitude Loop Controls", padding=8)
         frame.pack(fill="x", pady=4)
-        ttk.Label(frame, text="This stage uses a direct vertical-speed command and a simple P collective controller. The altitude outer loop remains disabled.", justify="left").pack(anchor="w", pady=(0, 8))
+        ttk.Label(frame, text="This stage uses an altitude outer loop to generate a vertical-speed command, followed by a simple P collective controller.", justify="left").pack(anchor="w", pady=(0, 8))
         inputs = ttk.Frame(frame)
         inputs.pack(fill="x", pady=(0, 8))
-        self._entry_row(inputs, 0, "Vz Cmd (m/s)", self.alt_cmd_m_var)
+        self._entry_row(inputs, 0, "Alt Cmd (m)", self.alt_cmd_m_var)
         self._entry_row(inputs, 1, "Hover Throttle", self.hover_throttle_var)
-        self._entry_row(inputs, 2, "kp_alt (reserved)", self.kp_alt_var)
-        self._entry_row(inputs, 3, "vz_max (reserved)", self.vz_max_var)
+        self._entry_row(inputs, 2, "kp_alt", self.kp_alt_var)
+        self._entry_row(inputs, 3, "vz_max", self.vz_max_var)
         self._entry_row(inputs, 4, "kp_vz", self.kp_vz_var)
         self._entry_row(inputs, 5, "ki_vz (unused)", self.ki_vz_var)
         self._entry_row(inputs, 6, "Throttle Min", self.throttle_min_var)
@@ -246,15 +246,15 @@ class RollRateTestApp:
         button_row = ttk.Frame(frame)
         button_row.pack(fill="x", pady=(0, 8))
         ttk.Button(button_row, text="Apply/Update Parameters", command=self.apply_altitude_loop_parameters).pack(side="left", padx=3)
-        ttk.Button(button_row, text="Start Vz Loop", command=self.start_altitude_loop).pack(side="left", padx=3)
-        ttk.Button(button_row, text="Stop Vz Loop", command=self.stop_altitude_loop).pack(side="left", padx=3)
+        ttk.Button(button_row, text="Start Altitude Loop", command=self.start_altitude_loop).pack(side="left", padx=3)
+        ttk.Button(button_row, text="Stop Altitude Loop", command=self.stop_altitude_loop).pack(side="left", padx=3)
         info = ttk.Frame(frame)
         info.pack(fill="x")
         rows = [
-            ("vz_cmd_input (m/s)", "alt_cmd_m"),
+            ("alt_cmd_input (m)", "alt_cmd_m"),
             ("altitude telemetry (m)", "alt_m"),
             ("vz telemetry (m/s)", "vz_m_s"),
-            ("alt_error (unused)", "alt_error_m"),
+            ("alt_error (m)", "alt_error_m"),
             ("vz_cmd (m/s)", "vz_cmd_m_s"),
             ("vz_error (m/s)", "vz_error_m_s"),
             ("throttle_correction", "throttle_correction"),
