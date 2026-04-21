@@ -46,9 +46,11 @@ class RollRateTelemetryReader:
             "pitch_deg": conn.add_stream(getattr, flight_default, "pitch"),
             "heading_deg": conn.add_stream(getattr, flight_default, "heading"),
             "mean_altitude": conn.add_stream(getattr, flight_default, "mean_altitude"),
+            "horizontal_speed": conn.add_stream(getattr, flight_default, "horizontal_speed"),
             "vertical_speed": conn.add_stream(getattr, flight_default, "vertical_speed"),
             "position_body_m": conn.add_stream(vessel.position, body_rf),
             "velocity_body_m_s": conn.add_stream(vessel.velocity, body_rf),
+            "velocity_body_axes_m_s": conn.add_stream(vessel.velocity, body_axes_surface_rate_rf),
             "body_rates_rfd_rad_s": conn.add_stream(vessel.angular_velocity, body_axes_surface_rate_rf),
         }
         self._last_timestamp_s = None
@@ -73,9 +75,26 @@ class RollRateTelemetryReader:
         pitch_deg = self._sanitize_scalar(float(self.streams["pitch_deg"]()))
         heading_deg = self._sanitize_scalar(float(self.streams["heading_deg"]()))
         alt_m = self._sanitize_scalar(float(self.streams["mean_altitude"]()))
+        ground_speed_m_s = self._sanitize_scalar(float(self.streams["horizontal_speed"]()))
         raw_vz_m_s = self._sanitize_scalar(float(self.streams["vertical_speed"]()))
         position_body_m = self._sanitize_vector(tuple(self.streams["position_body_m"]()))
+                
+                # 已有
         velocity_body_m_s = self._sanitize_vector(tuple(self.streams["velocity_body_m_s"]()))
+
+        # 新增：只旋转向量，不重新定义“速度相对于谁”
+        assert self.hardware.conn is not None
+        vessel_rf = self.hardware.vessel.reference_frame
+        body_rf = self.hardware.body.reference_frame
+
+        velocity_body_axes_rfd_m_s = self.hardware.conn.space_center.transform_direction(
+            velocity_body_m_s,
+            body_rf,
+            vessel_rf,
+        )
+
+        velocity_body_axes_frd_m_s = self._rfd_to_frd(velocity_body_axes_rfd_m_s)
+        
         dt_s = self._compute_dt(timestamp_s)
         vz_m_s = self._surface_vertical_speed_from_vectors(
             position_body_m=position_body_m,
@@ -100,6 +119,10 @@ class RollRateTelemetryReader:
             yaw_rate_deg_s=yaw_rate_deg_s,
             alt_m=alt_m,
             vz_m_s=vz_m_s,
+            vx_body_m_s=velocity_body_axes_frd_m_s[0],
+            vy_body_m_s=velocity_body_axes_frd_m_s[1],
+            vz_body_m_s=velocity_body_axes_frd_m_s[2],
+            ground_speed_m_s=ground_speed_m_s,
             body_rates_rfd_rad_s=body_rates_rfd,
             body_rates_frd_rad_s=body_rates_frd,
             timestamp_s=timestamp_s,

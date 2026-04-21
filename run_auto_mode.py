@@ -18,7 +18,7 @@ from runtime.runtime_service import RuntimeService
 
 console = Console()
 EVENT_LINES = 4
-LEFT_TABLE_ROWS = 16
+LEFT_TABLE_ROWS = 18
 RIGHT_TABLE_ROWS = 10
 
 
@@ -47,7 +47,10 @@ class DisplayConfig:
 @dataclass(frozen=True)
 class YawTestConfig:
     enabled: bool = True
-    kp_r: float = 50
+    kp_r: float = 40
+    ki_r: float = 50
+    kd_r: float = 1
+    integrator_limit_r: float = 20.0
     output_limit: float = 200
     steps: tuple[TimedCommand, ...] = (
         TimedCommand("neutral_hold", 0.00, 1.5),
@@ -81,6 +84,8 @@ class FlightConfig:
             vz_max=5.0,
             kp_vz=20.0,
             ki_vz=0.0,
+            kd_vz=0.0,
+            vz_integrator_limit=0.0,
             throttle_min=60.0,
             throttle_max=400.0,
         )
@@ -180,11 +185,18 @@ def _build_default_rows(context: DashboardContext) -> list[tuple[str, str]]:
             "Vz / Thr",
             f"{_fmt_float(getattr(telemetry, 'vz_m_s', 0.0), 7, 2)} m/s  |  {_fmt_float(getattr(altitude_loop, 'throttle_cmd', 0.0), 7, 1)}",
         ),
+        ("Ground Spd", f"{_fmt_float(getattr(telemetry, 'ground_speed_m_s', 0.0), 8, 2)} m/s"),
         (
             "Roll / Pitch",
             f"{_fmt_float(getattr(telemetry, 'roll_deg', 0.0), 7, 2)} / {_fmt_float(getattr(telemetry, 'pitch_deg', 0.0), 7, 2)} deg",
         ),
         ("Heading", f"{_fmt_float(getattr(telemetry, 'heading_deg', 0.0), 8, 2)} deg"),
+        (
+            "Body Vel F/R/D",
+            f"{_fmt_float(getattr(telemetry, 'vx_body_m_s', 0.0), 7, 2)} / "
+            f"{_fmt_float(getattr(telemetry, 'vy_body_m_s', 0.0), 7, 2)} / "
+            f"{_fmt_float(getattr(telemetry, 'vz_body_m_s', 0.0), 7, 2)} m/s",
+        ),
         (
             "Rates p/q/r",
             f"{_fmt_float(getattr(telemetry, 'p_meas_rad_s', 0.0), 7, 3)} / "
@@ -413,6 +425,15 @@ def run_hover_yaw_test(
         kp_p=base_command.kp_p,
         kp_q=base_command.kp_q,
         kp_r=yaw_test.kp_r,
+        ki_p=base_command.ki_p,
+        ki_q=base_command.ki_q,
+        ki_r=yaw_test.ki_r,
+        kd_p=base_command.kd_p,
+        kd_q=base_command.kd_q,
+        kd_r=yaw_test.kd_r,
+        integrator_limit_p=base_command.integrator_limit_p,
+        integrator_limit_q=base_command.integrator_limit_q,
+        integrator_limit_r=yaw_test.integrator_limit_r,
         output_limit=yaw_test.output_limit,
     )
 
@@ -431,6 +452,15 @@ def run_hover_yaw_test(
                     kp_p=yaw_command.kp_p,
                     kp_q=yaw_command.kp_q,
                     kp_r=yaw_command.kp_r,
+                    ki_p=yaw_command.ki_p,
+                    ki_q=yaw_command.ki_q,
+                    ki_r=yaw_command.ki_r,
+                    kd_p=yaw_command.kd_p,
+                    kd_q=yaw_command.kd_q,
+                    kd_r=yaw_command.kd_r,
+                    integrator_limit_p=yaw_command.integrator_limit_p,
+                    integrator_limit_q=yaw_command.integrator_limit_q,
+                    integrator_limit_r=yaw_command.integrator_limit_r,
                     output_limit=yaw_command.output_limit,
                 )
             )
@@ -519,6 +549,14 @@ def print_final_summary(service: RuntimeService, context: DashboardContext) -> N
         f"  vz / r: {float(getattr(telemetry, 'vz_m_s', 0.0)):.2f} m/s  |  {float(getattr(telemetry, 'r_meas_rad_s', 0.0)):.3f} rad/s",
         file=sys.stderr,
     )
+    print(
+        "  body vel F/R/D: "
+        f"{float(getattr(telemetry, 'vx_body_m_s', 0.0)):+.2f} / "
+        f"{float(getattr(telemetry, 'vy_body_m_s', 0.0)):+.2f} / "
+        f"{float(getattr(telemetry, 'vz_body_m_s', 0.0)):+.2f} m/s",
+        file=sys.stderr,
+    )
+    print(f"  ground speed: {float(getattr(telemetry, 'ground_speed_m_s', 0.0)):.2f} m/s", file=sys.stderr)
     print(
         f"  yaw err / u: {float(getattr(controller, 'error_r_rad_s', 0.0)):.3f} / {float(getattr(controller, 'u_yaw', 0.0)):.2f}",
         file=sys.stderr,

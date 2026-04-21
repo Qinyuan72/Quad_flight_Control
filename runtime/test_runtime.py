@@ -5,51 +5,71 @@ from dataclasses import replace
 try:
     from control.controller import (
         AltitudeOuterLoopController,
-        CascadedAltitudeController,
-        CascadedRollPitchController,
+        BodyRatePIDController,
         AngleOuterLoopController,
-        RollPitchRatePController,
-        VerticalSpeedPController,
+        BodyVelocityOuterLoopController,
+        VerticalSpeedPIDController,
+        YawOuterLoopController,
     )
     from control.mixer import MatrixMixer, check_yaw_sign_consistency
     from control.mixer_presets import get_candidate, list_candidates
+    from control.pipelines import AltitudeControlPipeline, AttitudeControlPipeline
     from data_api.krpc_bindings import KrpcQuadHardware
     from data_api.models import (
+        ActuatorDemand,
         AltitudeCommand,
         AltitudeControlConfig,
         AltitudeLoopOutput,
         AngleCommand,
         AngleOuterLoopConfig,
         AngleOuterLoopOutput,
+        BodyVelocityCommand,
+        BodyVelocityOuterLoopConfig,
+        BodyVelocityOuterLoopOutput,
+        BodyRateCommand,
+        BodyRatePIDConfig,
+        ControllerResult,
         MotorCommand,
         RollRateTelemetry,
         RollRateTestCommand,
         RollRateTestState,
+        YawOuterLoopConfig,
+        YawOuterLoopOutput,
     )
     from data_api.telemetry import RollRateTelemetryReader
 except ImportError:
     from ..control.controller import (
         AltitudeOuterLoopController,
-        CascadedAltitudeController,
-        CascadedRollPitchController,
+        BodyRatePIDController,
         AngleOuterLoopController,
-        RollPitchRatePController,
-        VerticalSpeedPController,
+        BodyVelocityOuterLoopController,
+        VerticalSpeedPIDController,
+        YawOuterLoopController,
     )
     from ..control.mixer import MatrixMixer, check_yaw_sign_consistency
     from ..control.mixer_presets import get_candidate, list_candidates
+    from ..control.pipelines import AltitudeControlPipeline, AttitudeControlPipeline
     from ..data_api.krpc_bindings import KrpcQuadHardware
     from ..data_api.models import (
+        ActuatorDemand,
         AltitudeCommand,
         AltitudeControlConfig,
         AltitudeLoopOutput,
         AngleCommand,
         AngleOuterLoopConfig,
         AngleOuterLoopOutput,
+        BodyVelocityCommand,
+        BodyVelocityOuterLoopConfig,
+        BodyVelocityOuterLoopOutput,
+        BodyRateCommand,
+        BodyRatePIDConfig,
+        ControllerResult,
         MotorCommand,
         RollRateTelemetry,
         RollRateTestCommand,
         RollRateTestState,
+        YawOuterLoopConfig,
+        YawOuterLoopOutput,
     )
     from ..data_api.telemetry import RollRateTelemetryReader
 
@@ -60,33 +80,56 @@ class RollRateInnerLoopRuntime:
     def __init__(self) -> None:
         self.hardware = KrpcQuadHardware()
         self.telemetry = RollRateTelemetryReader(self.hardware)
-        self.controller = CascadedRollPitchController(
-            rate_controller=RollPitchRatePController(),
+        self.attitude_pipeline = AttitudeControlPipeline(
+            body_velocity_controller=BodyVelocityOuterLoopController(
+                config=BodyVelocityOuterLoopConfig(
+                    kp_v_forward=0.0,
+                    kp_v_right=0.0,
+                    velocity_angle_limit_deg=10.0,
+                )
+            ),
             angle_controller=AngleOuterLoopController(
                 config=AngleOuterLoopConfig(
                     kp_roll_angle=0.0,
                     kp_pitch_angle=0.0,
+                    ki_roll_angle=0.0,
+                    ki_pitch_angle=0.0,
+                    kd_roll_angle=0.0,
+                    kd_pitch_angle=0.0,
+                    integrator_limit_roll=0.0,
+                    integrator_limit_pitch=0.0,
                     rate_limit_rad_s=1.0,
                 )
             ),
+            yaw_controller=YawOuterLoopController(
+                config=YawOuterLoopConfig(
+                    kp_yaw=0.0,
+                    yaw_rate_limit_rad_s=1.0,
+                )
+            ),
+            rate_controller=BodyRatePIDController(),
         )
-        self.altitude_controller = CascadedAltitudeController(
+        self.altitude_pipeline = AltitudeControlPipeline(
             altitude_outer_controller=AltitudeOuterLoopController(
                 config=AltitudeControlConfig(
                     kp_alt=0.0,
                     vz_max=0.0,
                     kp_vz=0.0,
                     ki_vz=0.0,
+                    kd_vz=0.0,
+                    vz_integrator_limit=0.0,
                     throttle_min=0.0,
                     throttle_max=460.0,
                 )
             ),
-            vertical_speed_controller=VerticalSpeedPController(
+            vertical_speed_controller=VerticalSpeedPIDController(
                 config=AltitudeControlConfig(
                     kp_alt=0.0,
                     vz_max=0.0,
                     kp_vz=0.0,
                     ki_vz=0.0,
+                    kd_vz=0.0,
+                    vz_integrator_limit=0.0,
                     throttle_min=0.0,
                     throttle_max=460.0,
                 )
@@ -101,26 +144,53 @@ class RollRateInnerLoopRuntime:
             kp_p=0.0,
             kp_q=0.0,
             kp_r=0.0,
+            ki_p=0.0,
+            ki_q=0.0,
+            ki_r=0.0,
+            kd_p=0.0,
+            kd_q=0.0,
+            kd_r=0.0,
+            integrator_limit_p=0.0,
+            integrator_limit_q=0.0,
+            integrator_limit_r=0.0,
             output_limit=0.0,
         )
+        self.body_rate_command, self.body_rate_config = self._split_legacy_rate_command(self.command)
         self.angle_command = AngleCommand()
+        self.body_velocity_command = BodyVelocityCommand()
+        self.body_velocity_outer_loop_config = BodyVelocityOuterLoopConfig(
+            kp_v_forward=0.0,
+            kp_v_right=0.0,
+            velocity_angle_limit_deg=10.0,
+        )
+        self.yaw_outer_loop_config = YawOuterLoopConfig(
+            kp_yaw=0.0,
+            yaw_rate_limit_rad_s=1.0,
+        )
         self.altitude_command = AltitudeCommand()
         self.altitude_config = AltitudeControlConfig(
             kp_alt=0.0,
             vz_max=0.0,
             kp_vz=0.0,
             ki_vz=0.0,
+            kd_vz=0.0,
+            vz_integrator_limit=0.0,
             throttle_min=0.0,
             throttle_max=460.0,
         )
         self.current_mixer = get_candidate(list_candidates()[0])
         self.test_running = False
         self.outer_loop_running = False
+        self.body_velocity_outer_loop_running = False
         self.altitude_loop_running = False
         self.last_snapshot = RollRateTestState(
             command=self.command,
             angle_command=self.angle_command,
-            outer_loop_config=self.controller.angle_controller.config,
+            body_velocity_command=self.body_velocity_command,
+            outer_loop_config=self.attitude_pipeline.angle_controller.config,
+            yaw_outer_loop_config=self.yaw_outer_loop_config,
+            body_velocity_outer_loop_config=self.body_velocity_outer_loop_config,
+            body_velocity_outer_loop_enabled=self.body_velocity_outer_loop_running,
             altitude_command=self.altitude_command,
             altitude_control_config=self.altitude_config,
             mixer_name=self.current_mixer.name,
@@ -135,10 +205,12 @@ class RollRateInnerLoopRuntime:
     def disconnect(self) -> None:
         self.test_running = False
         self.outer_loop_running = False
+        self.body_velocity_outer_loop_running = False
         self.altitude_loop_running = False
         self.telemetry.disconnect()
         self.hardware.disconnect()
-        self.altitude_controller.reset()
+        self.attitude_pipeline.reset()
+        self.altitude_pipeline.reset()
         self._refresh_snapshot(status="Disconnected")
 
     def bind(self) -> None:
@@ -154,14 +226,16 @@ class RollRateInnerLoopRuntime:
             raise RuntimeError("Bind tags before starting the test loop.")
         if not self.hardware.initialized:
             raise RuntimeError("Initialize hardware before starting the test loop.")
+        self.attitude_pipeline.reset()
         if self.altitude_loop_running:
-            self.altitude_controller.reset()
+            self.altitude_pipeline.reset()
         self.test_running = True
         self._refresh_snapshot(status="Test loop started")
 
     def stop_test(self) -> None:
         self.test_running = False
-        self.altitude_controller.reset()
+        self.attitude_pipeline.reset()
+        self.altitude_pipeline.reset()
         if self.hardware.is_bound():
             self.hardware.zero_outputs()
         self._refresh_snapshot(status="Test loop stopped")
@@ -169,13 +243,16 @@ class RollRateInnerLoopRuntime:
     def emergency_stop(self) -> None:
         self.test_running = False
         self.outer_loop_running = False
+        self.body_velocity_outer_loop_running = False
         self.altitude_loop_running = False
-        self.altitude_controller.reset()
+        self.attitude_pipeline.reset()
+        self.altitude_pipeline.reset()
         self.hardware.emergency_stop()
         self._refresh_snapshot(status="Emergency stop issued")
 
     def set_command(self, command: RollRateTestCommand) -> None:
         self.command = command
+        self.body_rate_command, self.body_rate_config = self._split_legacy_rate_command(command)
         self._refresh_live_snapshot(status="Inner-loop parameters updated")
 
     def set_angle_command(self, angle_command: AngleCommand) -> None:
@@ -183,16 +260,43 @@ class RollRateInnerLoopRuntime:
         self._refresh_live_snapshot(status="Outer-loop targets updated")
 
     def set_outer_loop_config(self, config: AngleOuterLoopConfig) -> None:
-        self.controller.set_outer_loop_config(config)
+        self.attitude_pipeline.set_outer_loop_config(config)
         self._refresh_live_snapshot(status="Outer-loop gains updated")
 
+    def set_body_velocity_command(self, command: BodyVelocityCommand) -> None:
+        self.body_velocity_command = command
+        self._refresh_live_snapshot(status="Body-velocity targets updated")
+
+    def set_body_velocity_outer_loop_config(self, config: BodyVelocityOuterLoopConfig) -> None:
+        self.body_velocity_outer_loop_config = config
+        self.attitude_pipeline.set_body_velocity_outer_loop_config(config)
+        self._refresh_live_snapshot(status="Body-velocity outer-loop gains updated")
+
+    def set_yaw_outer_loop_config(self, config: YawOuterLoopConfig) -> None:
+        self.yaw_outer_loop_config = config
+        self.attitude_pipeline.set_yaw_outer_loop_config(config)
+        self._refresh_live_snapshot(status="Yaw outer-loop gains updated")
+
     def start_outer_loop(self) -> None:
+        self.attitude_pipeline.angle_controller.reset()
         self.outer_loop_running = True
         self._refresh_live_snapshot(status="Outer loop enabled")
 
     def stop_outer_loop(self) -> None:
         self.outer_loop_running = False
+        self.attitude_pipeline.angle_controller.reset()
         self._refresh_live_snapshot(status="Outer loop disabled")
+
+    def start_body_velocity_outer_loop(self) -> None:
+        self.attitude_pipeline.body_velocity_controller.reset()
+        self.outer_loop_running = True
+        self.body_velocity_outer_loop_running = True
+        self._refresh_live_snapshot(status="Body-velocity outer loop enabled")
+
+    def stop_body_velocity_outer_loop(self) -> None:
+        self.body_velocity_outer_loop_running = False
+        self.attitude_pipeline.body_velocity_controller.reset()
+        self._refresh_live_snapshot(status="Body-velocity outer loop disabled")
 
     def set_altitude_command(self, altitude_command: AltitudeCommand) -> None:
         self.altitude_command = altitude_command
@@ -200,17 +304,17 @@ class RollRateInnerLoopRuntime:
 
     def set_altitude_config(self, config: AltitudeControlConfig) -> None:
         self.altitude_config = config
-        self.altitude_controller.set_config(config)
+        self.altitude_pipeline.set_config(config)
         self._refresh_live_snapshot(status="Altitude-loop gains updated")
 
     def start_altitude_loop(self) -> None:
-        self.altitude_controller.reset()
+        self.altitude_pipeline.reset()
         self.altitude_loop_running = True
         self._refresh_live_snapshot(status="Altitude loop enabled")
 
     def stop_altitude_loop(self) -> None:
         self.altitude_loop_running = False
-        self.altitude_controller.reset()
+        self.altitude_pipeline.reset()
         self._refresh_live_snapshot(status="Altitude loop disabled")
 
     def set_mixer_candidate(self, name: str) -> None:
@@ -243,55 +347,77 @@ class RollRateInnerLoopRuntime:
     def _run_cycle(self, *, write_outputs: bool, status: str) -> RollRateTestState:
         telemetry = self.telemetry.read()
         altitude_loop, collective_cmd = self._compute_altitude_channel(telemetry)
-        outer_loop, controller_result = self._compute_attitude_channel(telemetry)
-        motor_command = self.mixer.mix(
-            candidate=self.current_mixer,
+        body_velocity_outer_loop, outer_loop, yaw_outer_loop, controller_result = self._compute_attitude_channel(telemetry)
+        actuator_demand = ActuatorDemand(
             base_rpm=collective_cmd,
             u_roll=controller_result.u_roll,
             u_pitch=controller_result.u_pitch,
             u_yaw=controller_result.u_yaw,
         )
+        motor_command = self.mixer.mix(
+            candidate=self.current_mixer,
+            base_rpm=actuator_demand.base_rpm,
+            u_roll=actuator_demand.u_roll,
+            u_pitch=actuator_demand.u_pitch,
+            u_yaw=actuator_demand.u_yaw,
+        )
         if write_outputs:
             self.hardware.write_motor_command(motor_command)
         return self._refresh_snapshot(
             telemetry=telemetry,
+            body_velocity_outer_loop=body_velocity_outer_loop,
             outer_loop=outer_loop,
+            yaw_outer_loop=yaw_outer_loop,
             altitude_loop=altitude_loop,
             controller=controller_result,
             motor_command=motor_command,
             status=status,
         )
 
-    def _compute_attitude_channel(self, telemetry: RollRateTelemetry) -> tuple[AngleOuterLoopOutput, object]:
-        if self.outer_loop_running:
-            return self.controller.compute(
-                telemetry=telemetry,
-                angle_command=self.angle_command,
-                rate_command=self.command,
-            )
-
-        outer_loop = AngleOuterLoopOutput()
-        controller_result = self.controller.rate_controller.compute(
-            p_cmd_rad_s=self.command.p_cmd_rad_s,
-            q_cmd_rad_s=self.command.q_cmd_rad_s,
-            r_cmd_rad_s=self.command.r_cmd_rad_s,
-            p_meas_rad_s=telemetry.p_meas_rad_s,
-            q_meas_rad_s=telemetry.q_meas_rad_s,
-            r_meas_rad_s=telemetry.r_meas_rad_s,
-            kp_p=self.command.kp_p,
-            kp_q=self.command.kp_q,
-            kp_r=self.command.kp_r,
-            output_limit=self.command.output_limit,
+    def _compute_attitude_channel(self, telemetry: RollRateTelemetry) -> tuple[BodyVelocityOuterLoopOutput, AngleOuterLoopOutput, YawOuterLoopOutput, ControllerResult]:
+        return self.attitude_pipeline.compute(
+            telemetry=telemetry,
+            angle_command=self.angle_command,
+            body_velocity_command=self.body_velocity_command,
+            rate_command=self.body_rate_command,
+            rate_config=self.body_rate_config,
+            body_velocity_outer_config=self.body_velocity_outer_loop_config,
+            yaw_outer_config=self.yaw_outer_loop_config,
+            body_velocity_outer_loop_enabled=self.body_velocity_outer_loop_running,
+            outer_loop_enabled=self.outer_loop_running,
         )
-        return (outer_loop, controller_result)
 
     def _compute_altitude_channel(self, telemetry: RollRateTelemetry) -> tuple[AltitudeLoopOutput, float]:
-        altitude_loop = self.altitude_controller.compute(
+        altitude_loop = self.altitude_pipeline.compute(
             telemetry=telemetry,
             altitude_command=self.altitude_command,
         )
         collective_cmd = altitude_loop.throttle_cmd if self.altitude_loop_running else self.command.base_rpm
         return (altitude_loop, collective_cmd)
+
+    def _split_legacy_rate_command(self, command: RollRateTestCommand) -> tuple[BodyRateCommand, BodyRatePIDConfig]:
+        return (
+            BodyRateCommand(
+                p_cmd_rad_s=command.p_cmd_rad_s,
+                q_cmd_rad_s=command.q_cmd_rad_s,
+                r_cmd_rad_s=command.r_cmd_rad_s,
+            ),
+            BodyRatePIDConfig(
+                kp_p=command.kp_p,
+                kp_q=command.kp_q,
+                kp_r=command.kp_r,
+                ki_p=command.ki_p,
+                ki_q=command.ki_q,
+                ki_r=command.ki_r,
+                kd_p=command.kd_p,
+                kd_q=command.kd_q,
+                kd_r=command.kd_r,
+                integrator_limit_p=command.integrator_limit_p,
+                integrator_limit_q=command.integrator_limit_q,
+                integrator_limit_r=command.integrator_limit_r,
+                output_limit=command.output_limit,
+            ),
+        )
 
     def run_outer_loop_self_check(self) -> dict[str, object]:
         test_command = replace(
@@ -300,32 +426,127 @@ class RollRateInnerLoopRuntime:
             kp_p=1.0 if self.command.kp_p == 0.0 else self.command.kp_p,
             kp_q=1.0 if self.command.kp_q == 0.0 else self.command.kp_q,
             kp_r=1.0 if self.command.kp_r == 0.0 else self.command.kp_r,
+            ki_p=0.0,
+            ki_q=0.0,
+            ki_r=0.0,
+            kd_p=0.0,
+            kd_q=0.0,
+            kd_r=0.0,
+            integrator_limit_p=0.0,
+            integrator_limit_q=0.0,
+            integrator_limit_r=0.0,
             output_limit=10.0 if self.command.output_limit <= 0.0 else self.command.output_limit,
         )
         test_config = AngleOuterLoopConfig(
             kp_roll_angle=0.10,
             kp_pitch_angle=0.10,
+            ki_roll_angle=0.0,
+            ki_pitch_angle=0.0,
+            kd_roll_angle=0.0,
+            kd_pitch_angle=0.0,
+            integrator_limit_roll=0.0,
+            integrator_limit_pitch=0.0,
             rate_limit_rad_s=2.0,
         )
+        test_yaw_config = YawOuterLoopConfig(
+            kp_yaw=1.0,
+            yaw_rate_limit_rad_s=2.0,
+        )
+        test_rate_command, test_rate_config = self._split_legacy_rate_command(test_command)
 
-        case_roll = self.controller.compute(
+        case_roll = self.attitude_pipeline.compute(
             telemetry=RollRateTelemetry(roll_deg=0.0, pitch_deg=0.0, p_meas_rad_s=0.0, q_meas_rad_s=0.0),
-            angle_command=AngleCommand(roll_cmd_deg=5.0, pitch_cmd_deg=0.0),
-            rate_command=test_command,
+            angle_command=AngleCommand(roll_cmd_deg=5.0, pitch_cmd_deg=0.0, yaw_cmd_deg=0.0),
+            body_velocity_command=BodyVelocityCommand(),
+            rate_command=test_rate_command,
+            rate_config=test_rate_config,
+            body_velocity_outer_loop_enabled=False,
             outer_config=test_config,
-        )[0]
-        case_roll_near = self.controller.compute(
+            yaw_outer_config=test_yaw_config,
+            outer_loop_enabled=True,
+        )[1]
+        case_roll_near = self.attitude_pipeline.compute(
             telemetry=RollRateTelemetry(roll_deg=4.0, pitch_deg=0.0, p_meas_rad_s=0.0, q_meas_rad_s=0.0),
-            angle_command=AngleCommand(roll_cmd_deg=5.0, pitch_cmd_deg=0.0),
-            rate_command=test_command,
+            angle_command=AngleCommand(roll_cmd_deg=5.0, pitch_cmd_deg=0.0, yaw_cmd_deg=0.0),
+            body_velocity_command=BodyVelocityCommand(),
+            rate_command=test_rate_command,
+            rate_config=test_rate_config,
+            body_velocity_outer_loop_enabled=False,
             outer_config=test_config,
-        )[0]
-        case_pitch = self.controller.compute(
+            yaw_outer_config=test_yaw_config,
+            outer_loop_enabled=True,
+        )[1]
+        case_pitch = self.attitude_pipeline.compute(
             telemetry=RollRateTelemetry(roll_deg=0.0, pitch_deg=0.0, p_meas_rad_s=0.0, q_meas_rad_s=0.0),
-            angle_command=AngleCommand(roll_cmd_deg=0.0, pitch_cmd_deg=5.0),
-            rate_command=test_command,
+            angle_command=AngleCommand(roll_cmd_deg=0.0, pitch_cmd_deg=5.0, yaw_cmd_deg=0.0),
+            body_velocity_command=BodyVelocityCommand(),
+            rate_command=test_rate_command,
+            rate_config=test_rate_config,
+            body_velocity_outer_loop_enabled=False,
             outer_config=test_config,
-        )[0]
+            yaw_outer_config=test_yaw_config,
+            outer_loop_enabled=True,
+        )[1]
+        damped_config = AngleOuterLoopConfig(
+            kp_roll_angle=0.10,
+            kp_pitch_angle=0.10,
+            ki_roll_angle=0.0,
+            ki_pitch_angle=0.0,
+            kd_roll_angle=0.5,
+            kd_pitch_angle=0.0,
+            integrator_limit_roll=0.0,
+            integrator_limit_pitch=0.0,
+            rate_limit_rad_s=2.0,
+        )
+        damped_case = AngleOuterLoopController(config=damped_config).compute(
+            roll_cmd_deg=5.0,
+            pitch_cmd_deg=0.0,
+            roll_meas_deg=0.0,
+            pitch_meas_deg=0.0,
+            roll_rate_rad_s=0.2,
+            pitch_rate_rad_s=0.0,
+            dt_s=0.1,
+        )
+        integral_config = AngleOuterLoopConfig(
+            kp_roll_angle=0.10,
+            kp_pitch_angle=0.10,
+            ki_roll_angle=0.20,
+            ki_pitch_angle=0.0,
+            kd_roll_angle=0.0,
+            kd_pitch_angle=0.0,
+            integrator_limit_roll=1.0,
+            integrator_limit_pitch=0.0,
+            rate_limit_rad_s=2.0,
+        )
+        integral_controller = AngleOuterLoopController(config=integral_config)
+        integral_first = integral_controller.compute(
+            roll_cmd_deg=5.0,
+            pitch_cmd_deg=0.0,
+            roll_meas_deg=0.0,
+            pitch_meas_deg=0.0,
+            roll_rate_rad_s=0.0,
+            pitch_rate_rad_s=0.0,
+            dt_s=0.1,
+        )
+        integral_second = integral_controller.compute(
+            roll_cmd_deg=5.0,
+            pitch_cmd_deg=0.0,
+            roll_meas_deg=0.0,
+            pitch_meas_deg=0.0,
+            roll_rate_rad_s=0.0,
+            pitch_rate_rad_s=0.0,
+            dt_s=0.1,
+        )
+        integral_controller.reset()
+        integral_after_reset = integral_controller.compute(
+            roll_cmd_deg=5.0,
+            pitch_cmd_deg=0.0,
+            roll_meas_deg=0.0,
+            pitch_meas_deg=0.0,
+            roll_rate_rad_s=0.0,
+            pitch_rate_rad_s=0.0,
+            dt_s=0.1,
+        )
 
         return {
             "case_roll": {
@@ -345,6 +566,77 @@ class RollRateInnerLoopRuntime:
                 "q_cmd_from_angle": case_pitch.q_cmd_rad_s,
                 "pass": case_pitch.q_cmd_rad_s > 0.0 and abs(case_pitch.p_cmd_rad_s) < 1e-9,
             },
+            "case_roll_damped": {
+                "p_cmd_from_angle": damped_case.p_cmd_rad_s,
+                "pass": damped_case.p_cmd_rad_s < case_roll.p_cmd_rad_s,
+            },
+            "case_roll_integral_reset": {
+                "first_cmd": integral_first.p_cmd_rad_s,
+                "second_cmd": integral_second.p_cmd_rad_s,
+                "after_reset_cmd": integral_after_reset.p_cmd_rad_s,
+                "pass": integral_second.p_cmd_rad_s > integral_first.p_cmd_rad_s and abs(integral_after_reset.p_cmd_rad_s - integral_first.p_cmd_rad_s) < 1e-9,
+            },
+        }
+
+    def run_body_velocity_outer_loop_self_check(self) -> dict[str, object]:
+        test_config = BodyVelocityOuterLoopConfig(
+            kp_v_forward=2.0,
+            kp_v_right=3.0,
+            velocity_angle_limit_deg=8.0,
+        )
+        test_command = BodyVelocityCommand(
+            v_forward_cmd_m_s=1.0,
+            v_right_cmd_m_s=0.5,
+        )
+        controller = BodyVelocityOuterLoopController(config=test_config)
+        case_positive = controller.compute(
+            v_forward_cmd_m_s=test_command.v_forward_cmd_m_s,
+            v_right_cmd_m_s=test_command.v_right_cmd_m_s,
+            vx_body_m_s=0.0,
+            vy_body_m_s=0.0,
+        )
+        case_limited = controller.compute(
+            v_forward_cmd_m_s=10.0,
+            v_right_cmd_m_s=10.0,
+            vx_body_m_s=0.0,
+            vy_body_m_s=0.0,
+        )
+        runtime_case = self.attitude_pipeline.compute(
+            telemetry=RollRateTelemetry(vx_body_m_s=0.0, vy_body_m_s=0.0, p_meas_rad_s=0.0, q_meas_rad_s=0.0),
+            angle_command=AngleCommand(roll_cmd_deg=0.0, pitch_cmd_deg=0.0, yaw_cmd_deg=0.0),
+            body_velocity_command=test_command,
+            rate_command=BodyRateCommand(),
+            rate_config=BodyRatePIDConfig(output_limit=10.0),
+            body_velocity_outer_config=test_config,
+            outer_config=AngleOuterLoopConfig(
+                kp_roll_angle=0.10,
+                kp_pitch_angle=0.10,
+                rate_limit_rad_s=2.0,
+            ),
+            yaw_outer_config=YawOuterLoopConfig(),
+            body_velocity_outer_loop_enabled=True,
+            outer_loop_enabled=True,
+        )
+        velocity_output = runtime_case[0]
+        attitude_output = runtime_case[1]
+        return {
+            "case_positive": {
+                "pitch_cmd_from_velocity_deg": case_positive.pitch_cmd_from_velocity_deg,
+                "roll_cmd_from_velocity_deg": case_positive.roll_cmd_from_velocity_deg,
+                "pass": case_positive.pitch_cmd_from_velocity_deg > 0.0 and case_positive.roll_cmd_from_velocity_deg > 0.0,
+            },
+            "case_limited": {
+                "pitch_cmd_from_velocity_deg": case_limited.pitch_cmd_from_velocity_deg,
+                "roll_cmd_from_velocity_deg": case_limited.roll_cmd_from_velocity_deg,
+                "pass": abs(case_limited.pitch_cmd_from_velocity_deg) <= test_config.velocity_angle_limit_deg + 1e-9 and abs(case_limited.roll_cmd_from_velocity_deg) <= test_config.velocity_angle_limit_deg + 1e-9,
+            },
+            "runtime_wiring": {
+                "velocity_pitch_cmd_deg": velocity_output.pitch_cmd_from_velocity_deg,
+                "velocity_roll_cmd_deg": velocity_output.roll_cmd_from_velocity_deg,
+                "p_cmd_rad_s": attitude_output.p_cmd_rad_s,
+                "q_cmd_rad_s": attitude_output.q_cmd_rad_s,
+                "pass": abs(velocity_output.pitch_cmd_from_velocity_deg) > 0.0 and abs(velocity_output.roll_cmd_from_velocity_deg) > 0.0 and abs(attitude_output.p_cmd_rad_s) > 0.0 and abs(attitude_output.q_cmd_rad_s) > 0.0,
+            },
         }
 
     def run_yaw_rate_self_check(self) -> dict[str, object]:
@@ -359,31 +651,52 @@ class RollRateInnerLoopRuntime:
             kp_r=40.0 if self.command.kp_r == 0.0 else self.command.kp_r,
             output_limit=60.0 if self.command.output_limit <= 0.0 else self.command.output_limit,
         )
-        case_positive = self.controller.rate_controller.compute(
+        test_rate_command, test_rate_config = self._split_legacy_rate_command(test_command)
+        case_positive = self.attitude_pipeline.rate_controller.compute(
             p_cmd_rad_s=0.0,
             q_cmd_rad_s=0.0,
-            r_cmd_rad_s=test_command.r_cmd_rad_s,
+            r_cmd_rad_s=test_rate_command.r_cmd_rad_s,
             p_meas_rad_s=0.0,
             q_meas_rad_s=0.0,
             r_meas_rad_s=0.0,
             kp_p=0.0,
             kp_q=0.0,
-            kp_r=test_command.kp_r,
-            output_limit=test_command.output_limit,
+            kp_r=test_rate_config.kp_r,
+            ki_p=0.0,
+            ki_q=0.0,
+            ki_r=0.0,
+            kd_p=0.0,
+            kd_q=0.0,
+            kd_r=0.0,
+            integrator_limit_p=0.0,
+            integrator_limit_q=0.0,
+            integrator_limit_r=0.0,
+            dt_s=0.1,
+            output_limit=test_rate_config.output_limit,
         )
-        case_near = self.controller.rate_controller.compute(
+        case_near = self.attitude_pipeline.rate_controller.compute(
             p_cmd_rad_s=0.0,
             q_cmd_rad_s=0.0,
-            r_cmd_rad_s=test_command.r_cmd_rad_s,
+            r_cmd_rad_s=test_rate_command.r_cmd_rad_s,
             p_meas_rad_s=0.0,
             q_meas_rad_s=0.0,
             r_meas_rad_s=0.15,
             kp_p=0.0,
             kp_q=0.0,
-            kp_r=test_command.kp_r,
-            output_limit=test_command.output_limit,
+            kp_r=test_rate_config.kp_r,
+            ki_p=0.0,
+            ki_q=0.0,
+            ki_r=0.0,
+            kd_p=0.0,
+            kd_q=0.0,
+            kd_r=0.0,
+            integrator_limit_p=0.0,
+            integrator_limit_q=0.0,
+            integrator_limit_r=0.0,
+            dt_s=0.1,
+            output_limit=test_rate_config.output_limit,
         )
-        case_negative = self.controller.rate_controller.compute(
+        case_negative = self.attitude_pipeline.rate_controller.compute(
             p_cmd_rad_s=0.0,
             q_cmd_rad_s=0.0,
             r_cmd_rad_s=-0.2,
@@ -392,8 +705,18 @@ class RollRateInnerLoopRuntime:
             r_meas_rad_s=0.0,
             kp_p=0.0,
             kp_q=0.0,
-            kp_r=test_command.kp_r,
-            output_limit=test_command.output_limit,
+            kp_r=test_rate_config.kp_r,
+            ki_p=0.0,
+            ki_q=0.0,
+            ki_r=0.0,
+            kd_p=0.0,
+            kd_q=0.0,
+            kd_r=0.0,
+            integrator_limit_p=0.0,
+            integrator_limit_q=0.0,
+            integrator_limit_r=0.0,
+            dt_s=0.1,
+            output_limit=test_rate_config.output_limit,
         )
         positive_motor = self.mixer.mix(
             candidate=self.current_mixer,
@@ -410,7 +733,7 @@ class RollRateInnerLoopRuntime:
             u_yaw=case_negative.u_yaw,
         )
         positive_sign = check_yaw_sign_consistency(
-            r_cmd_rad_s=test_command.r_cmd_rad_s,
+            r_cmd_rad_s=test_rate_command.r_cmd_rad_s,
             r_meas_rad_s=0.0,
             u_yaw=case_positive.u_yaw,
             candidate=self.current_mixer,
@@ -454,20 +777,22 @@ class RollRateInnerLoopRuntime:
             vz_max=2.0,
             kp_vz=10.0,
             ki_vz=0.0,
+            kd_vz=0.0,
+            vz_integrator_limit=0.0,
             throttle_min=0.0,
             throttle_max=460.0,
         )
-        case_climb = self.altitude_controller.compute(
+        case_climb = self.altitude_pipeline.compute(
             telemetry=RollRateTelemetry(alt_m=0.0, vz_m_s=0.0, dt_s=0.1),
             altitude_command=AltitudeCommand(alt_cmd_m=2.0, hover_throttle=220.0),
             config=test_config,
         )
-        case_near = self.altitude_controller.compute(
+        case_near = self.altitude_pipeline.compute(
             telemetry=RollRateTelemetry(alt_m=1.5, vz_m_s=0.5, dt_s=0.1),
             altitude_command=AltitudeCommand(alt_cmd_m=2.0, hover_throttle=220.0),
             config=test_config,
         )
-        case_descend = self.altitude_controller.compute(
+        case_descend = self.altitude_pipeline.compute(
             telemetry=RollRateTelemetry(alt_m=2.0, vz_m_s=0.0, dt_s=0.1),
             altitude_command=AltitudeCommand(alt_cmd_m=0.0, hover_throttle=220.0),
             config=test_config,
@@ -500,6 +825,42 @@ class RollRateInnerLoopRuntime:
             },
         }
 
+    def run_yaw_outer_loop_self_check(self) -> dict[str, object]:
+        test_config = YawOuterLoopConfig(
+            kp_yaw=1.0,
+            yaw_rate_limit_rad_s=1.0,
+        )
+        test_controller = YawOuterLoopController(config=test_config)
+        case_wrap_positive = test_controller.compute(
+            yaw_cmd_deg=10.0,
+            heading_deg=350.0,
+        )
+        case_wrap_negative = test_controller.compute(
+            yaw_cmd_deg=350.0,
+            heading_deg=10.0,
+        )
+        limited = test_controller.compute(
+            yaw_cmd_deg=180.0,
+            heading_deg=0.0,
+        )
+        return {
+            "case_wrap_positive": {
+                "yaw_error_deg": case_wrap_positive.yaw_error_deg,
+                "r_cmd_rad_s": case_wrap_positive.r_cmd_rad_s,
+                "pass": abs(case_wrap_positive.yaw_error_deg - 20.0) < 1e-6 and case_wrap_positive.r_cmd_rad_s > 0.0,
+            },
+            "case_wrap_negative": {
+                "yaw_error_deg": case_wrap_negative.yaw_error_deg,
+                "r_cmd_rad_s": case_wrap_negative.r_cmd_rad_s,
+                "pass": abs(case_wrap_negative.yaw_error_deg + 20.0) < 1e-6 and case_wrap_negative.r_cmd_rad_s < 0.0,
+            },
+            "case_limit": {
+                "yaw_error_deg": limited.yaw_error_deg,
+                "r_cmd_rad_s": limited.r_cmd_rad_s,
+                "pass": abs(limited.r_cmd_rad_s) <= test_config.yaw_rate_limit_rad_s + 1e-9,
+            },
+        }
+
     def get_snapshot(self) -> RollRateTestState:
         return self.last_snapshot
 
@@ -508,7 +869,9 @@ class RollRateInnerLoopRuntime:
         *,
         telemetry=None,
         controller=None,
+        body_velocity_outer_loop: BodyVelocityOuterLoopOutput | None = None,
         outer_loop: AngleOuterLoopOutput | None = None,
+        yaw_outer_loop: YawOuterLoopOutput | None = None,
         altitude_loop: AltitudeLoopOutput | None = None,
         motor_command: MotorCommand | None = None,
         status: str = "Idle",
@@ -516,7 +879,9 @@ class RollRateInnerLoopRuntime:
     ) -> RollRateTestState:
         telemetry_value = telemetry if telemetry is not None else self.last_snapshot.telemetry
         controller_value = controller if controller is not None else self.last_snapshot.controller
+        body_velocity_outer_loop_value = body_velocity_outer_loop if body_velocity_outer_loop is not None else self.last_snapshot.body_velocity_outer_loop
         outer_loop_value = outer_loop if outer_loop is not None else self.last_snapshot.outer_loop
+        yaw_outer_loop_value = yaw_outer_loop if yaw_outer_loop is not None else self.last_snapshot.yaw_outer_loop
         altitude_loop_value = altitude_loop if altitude_loop is not None else self.last_snapshot.altitude_loop
         motor_value = motor_command if motor_command is not None else self.last_snapshot.motor_command
         binding = self.hardware.get_binding_status(test_running=self.test_running)
@@ -526,8 +891,14 @@ class RollRateInnerLoopRuntime:
             telemetry=telemetry_value,
             controller=controller_value,
             angle_command=self.angle_command,
-            outer_loop_config=self.controller.angle_controller.config,
+            body_velocity_command=self.body_velocity_command,
+            outer_loop_config=self.attitude_pipeline.angle_controller.config,
             outer_loop=outer_loop_value,
+            yaw_outer_loop_config=self.yaw_outer_loop_config,
+            yaw_outer_loop=yaw_outer_loop_value,
+            body_velocity_outer_loop_config=self.body_velocity_outer_loop_config,
+            body_velocity_outer_loop=body_velocity_outer_loop_value,
+            body_velocity_outer_loop_enabled=self.body_velocity_outer_loop_running,
             outer_loop_running=self.outer_loop_running,
             altitude_command=self.altitude_command,
             altitude_control_config=self.altitude_config,
@@ -542,8 +913,3 @@ class RollRateInnerLoopRuntime:
             last_status=status,
         )
         return self.last_snapshot
-
-
-
-
-

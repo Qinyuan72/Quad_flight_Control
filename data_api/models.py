@@ -53,6 +53,10 @@ class RollRateTelemetry:
 
     alt_m: float = 0.0
     vz_m_s: float = 0.0
+    vx_body_m_s: float = 0.0
+    vy_body_m_s: float = 0.0
+    vz_body_m_s: float = 0.0
+    ground_speed_m_s: float = 0.0
 
     body_rates_rfd_rad_s: tuple[float, float, float] = (0.0, 0.0, 0.0)
     body_rates_frd_rad_s: tuple[float, float, float] = (0.0, 0.0, 0.0)
@@ -72,16 +76,62 @@ class RollRateTestCommand:
     kp_p: float = 0.0
     kp_q: float = 0.0
     kp_r: float = 0.0
+    ki_p: float = 0.0
+    ki_q: float = 0.0
+    ki_r: float = 0.0
+    kd_p: float = 0.0
+    kd_q: float = 0.0
+    kd_r: float = 0.0
+    integrator_limit_p: float = 0.0
+    integrator_limit_q: float = 0.0
+    integrator_limit_r: float = 0.0
+    output_limit: float = 0.0
+
+
+@dataclass(frozen=True)
+class BodyRateCommand:
+    """Direct body-rate targets for the attitude inner loop."""
+
+    p_cmd_rad_s: float = 0.0
+    q_cmd_rad_s: float = 0.0
+    r_cmd_rad_s: float = 0.0
+
+
+@dataclass(frozen=True)
+class BodyRatePIDConfig:
+    """PID gains and limits for the body-rate inner loop."""
+
+    kp_p: float = 0.0
+    kp_q: float = 0.0
+    kp_r: float = 0.0
+    ki_p: float = 0.0
+    ki_q: float = 0.0
+    ki_r: float = 0.0
+    kd_p: float = 0.0
+    kd_q: float = 0.0
+    kd_r: float = 0.0
+    integrator_limit_p: float = 0.0
+    integrator_limit_q: float = 0.0
+    integrator_limit_r: float = 0.0
     output_limit: float = 0.0
 
 
 @dataclass(frozen=True)
 class ControllerResult:
-    """Output of the P-only body-rate inner-loop controller."""
+    """Output of the PID-capable body-rate inner-loop controller."""
 
     error_p_rad_s: float = 0.0
     error_q_rad_s: float = 0.0
     error_r_rad_s: float = 0.0
+    p_term_roll: float = 0.0
+    i_term_roll: float = 0.0
+    d_term_roll: float = 0.0
+    p_term_pitch: float = 0.0
+    i_term_pitch: float = 0.0
+    d_term_pitch: float = 0.0
+    p_term_yaw: float = 0.0
+    i_term_yaw: float = 0.0
+    d_term_yaw: float = 0.0
     u_roll: float = 0.0
     u_pitch: float = 0.0
     u_yaw: float = 0.0
@@ -97,19 +147,34 @@ class AngleCommand:
 
     roll_cmd_deg: float = 0.0
     pitch_cmd_deg: float = 0.0
+    yaw_cmd_deg: float = 0.0
+
+
+@dataclass(frozen=True)
+class BodyVelocityCommand:
+    """User-commanded body-frame forward/right velocity targets."""
+
+    v_forward_cmd_m_s: float = 0.0
+    v_right_cmd_m_s: float = 0.0
 
 
 @dataclass(frozen=True)
 class AngleOuterLoopConfig:
     """
-    P-only angle outer-loop configuration.
+    PID-capable roll/pitch angle outer-loop configuration.
 
-    kp_*_angle unit:
-        rad/s per deg
+    The controller converts the human-edited gains once at entry and then
+    performs all internal math in rad / rad/s / s.
     """
 
     kp_roll_angle: float = 0.08
     kp_pitch_angle: float = 0.08
+    ki_roll_angle: float = 0.0
+    ki_pitch_angle: float = 0.0
+    kd_roll_angle: float = 0.0
+    kd_pitch_angle: float = 0.0
+    integrator_limit_roll: float = 0.0
+    integrator_limit_pitch: float = 0.0
     rate_limit_rad_s: float = 1.0
 
 
@@ -133,6 +198,45 @@ class OuterLoopState:
     q_cmd_from_angle_rad_s: float = 0.0
 
 
+@dataclass(frozen=True)
+class YawOuterLoopConfig:
+    """P-only yaw outer-loop configuration from heading error to yaw-rate command."""
+
+    kp_yaw: float = 0.0
+    yaw_rate_limit_rad_s: float = 1.0
+
+
+@dataclass(frozen=True)
+class YawOuterLoopOutput:
+    """Yaw outer-loop output: wrapped heading error and generated yaw-rate command."""
+
+    yaw_error_deg: float = 0.0
+    r_cmd_rad_s: float = 0.0
+    yaw_cmd_deg: float = 0.0
+    heading_deg: float = 0.0
+
+
+@dataclass(frozen=True)
+class BodyVelocityOuterLoopConfig:
+    """P-only body-frame XY velocity outer-loop configuration."""
+
+    kp_v_forward: float = 0.0
+    kp_v_right: float = 0.0
+    velocity_angle_limit_deg: float = 10.0
+
+
+@dataclass(frozen=True)
+class BodyVelocityOuterLoopOutput:
+    """Body-frame XY velocity outer-loop output for the attitude loop."""
+
+    v_forward_cmd_m_s: float = 0.0
+    v_right_cmd_m_s: float = 0.0
+    v_forward_error_m_s: float = 0.0
+    v_right_error_m_s: float = 0.0
+    pitch_cmd_from_velocity_deg: float = 0.0
+    roll_cmd_from_velocity_deg: float = 0.0
+
+
 # ============================================================================
 # Altitude-loop control models
 # ============================================================================
@@ -153,6 +257,8 @@ class AltitudeControlConfig:
     vz_max: float = 0.0
     kp_vz: float = 0.0
     ki_vz: float = 0.0
+    kd_vz: float = 0.0
+    vz_integrator_limit: float = 0.0
     throttle_min: float = 0.0
     throttle_max: float = RPM_MAX
 
@@ -167,9 +273,32 @@ class AltitudeLoopOutput:
     alt_error_m: float = 0.0
     vz_cmd_m_s: float = 0.0
     vz_error_m_s: float = 0.0
+    p_term: float = 0.0
+    i_term: float = 0.0
+    d_term: float = 0.0
     throttle_correction: float = 0.0
     throttle_cmd: float = 0.0
     integrator_state: float = 0.0
+
+
+@dataclass(frozen=True)
+class VerticalSpeedCommand:
+    """Vertical-speed inner-loop target and hover collective reference."""
+
+    vz_cmd_m_s: float = 0.0
+    hover_throttle: float = 0.0
+
+
+@dataclass(frozen=True)
+class VerticalSpeedPIDConfig:
+    """PID gains and limits for the vertical-speed inner loop."""
+
+    kp_vz: float = 0.0
+    ki_vz: float = 0.0
+    kd_vz: float = 0.0
+    vz_integrator_limit: float = 0.0
+    throttle_min: float = 0.0
+    throttle_max: float = RPM_MAX
 
 
 # ============================================================================
@@ -192,6 +321,16 @@ class MotorCommand:
             "RL": self.rl_rpm,
             "RR": self.rr_rpm,
         }
+
+
+@dataclass(frozen=True)
+class ActuatorDemand:
+    """Intermediate mixer demand before per-motor distribution."""
+
+    base_rpm: float = 0.0
+    u_roll: float = 0.0
+    u_pitch: float = 0.0
+    u_yaw: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -237,8 +376,14 @@ class RollRateTestState:
     controller: ControllerResult = field(default_factory=ControllerResult)
 
     angle_command: AngleCommand = field(default_factory=AngleCommand)
+    body_velocity_command: BodyVelocityCommand = field(default_factory=BodyVelocityCommand)
     outer_loop_config: AngleOuterLoopConfig = field(default_factory=AngleOuterLoopConfig)
     outer_loop: AngleOuterLoopOutput = field(default_factory=AngleOuterLoopOutput)
+    yaw_outer_loop_config: YawOuterLoopConfig = field(default_factory=YawOuterLoopConfig)
+    yaw_outer_loop: YawOuterLoopOutput = field(default_factory=YawOuterLoopOutput)
+    body_velocity_outer_loop_config: BodyVelocityOuterLoopConfig = field(default_factory=BodyVelocityOuterLoopConfig)
+    body_velocity_outer_loop: BodyVelocityOuterLoopOutput = field(default_factory=BodyVelocityOuterLoopOutput)
+    body_velocity_outer_loop_enabled: bool = False
     outer_loop_running: bool = False
 
     altitude_command: AltitudeCommand = field(default_factory=AltitudeCommand)

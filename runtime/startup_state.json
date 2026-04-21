@@ -3,30 +3,61 @@
     "base_rpm": 50.0,
     "p_cmd_rad_s": 0.0,
     "q_cmd_rad_s": 0.0,
-    "r_cmd_rad_s": -0.2,
+    "r_cmd_rad_s": 0.0,
     "kp_p": 40.0,
     "kp_q": 40.0,
-    "kp_r": 40.0,
-    "output_limit": 60.0
+    "kp_r": 20.0,
+    "ki_p": 0.2,
+    "ki_q": 0.25,
+    "ki_r": 0.1,
+    "kd_p": 5.0,
+    "kd_q": 5.0,
+    "kd_r": 0.1,
+    "integrator_limit_p": 1.0,
+    "integrator_limit_q": 5.0,
+    "integrator_limit_r": 10.0,
+    "output_limit": 150.0
   },
   "angle_command": {
-    "roll_cmd_deg": 0.0,
-    "pitch_cmd_deg": 0.0
+    "roll_cmd_deg": 5.0,
+    "pitch_cmd_deg": 135.0,
+    "yaw_cmd_deg": 270.0
+  },
+  "body_velocity_command": {
+    "v_forward_cmd_m_s": 0.0,
+    "v_right_cmd_m_s": 0.0
   },
   "outer_config": {
     "kp_roll_angle": -0.05,
     "kp_pitch_angle": -0.05,
-    "rate_limit_rad_s": 1.0
+    "ki_roll_angle": -0.03,
+    "ki_pitch_angle": -0.04,
+    "kd_roll_angle": 0.8,
+    "kd_pitch_angle": 0.8,
+    "integrator_limit_roll": 0.06,
+    "integrator_limit_pitch": 0.06,
+    "rate_limit_rad_s": 0.6
+  },
+  "body_velocity_outer_config": {
+    "kp_v_forward": -2.5,
+    "kp_v_right": 2.5,
+    "velocity_angle_limit_deg": 30.0
+  },
+  "yaw_outer_config": {
+    "kp_yaw": -15.0,
+    "yaw_rate_limit_rad_s": 3.0
   },
   "altitude_command": {
-    "alt_cmd_m": 71.0,
+    "alt_cmd_m": 66.0,
     "hover_throttle": 290.0
   },
   "altitude_config": {
     "kp_alt": 0.5,
-    "vz_max": 5.0,
+    "vz_max": 15.0,
     "kp_vz": 20.0,
-    "ki_vz": 0.0,
+    "ki_vz": 2.0,
+    "kd_vz": 2.0,
+    "vz_integrator_limit": 0.0,
     "throttle_min": 60.0,
     "throttle_max": 400.0
   },

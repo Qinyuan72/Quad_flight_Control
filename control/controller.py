@@ -1,36 +1,54 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 
 try:
     from data_api.models import (
-        AltitudeCommand,
         AltitudeControlConfig,
-        AltitudeLoopOutput,
-        AngleCommand,
         AngleOuterLoopConfig,
         AngleOuterLoopOutput,
+        BodyVelocityOuterLoopConfig,
+        BodyVelocityOuterLoopOutput,
         ControllerResult,
-        RollRateTelemetry,
-        RollRateTestCommand,
+        YawOuterLoopConfig,
+        YawOuterLoopOutput,
     )
 except ImportError:
     from ..data_api.models import (
-        AltitudeCommand,
         AltitudeControlConfig,
-        AltitudeLoopOutput,
-        AngleCommand,
         AngleOuterLoopConfig,
         AngleOuterLoopOutput,
+        BodyVelocityOuterLoopConfig,
+        BodyVelocityOuterLoopOutput,
         ControllerResult,
-        RollRateTelemetry,
-        RollRateTestCommand,
+        YawOuterLoopConfig,
+        YawOuterLoopOutput,
     )
 
 
+def wrap_deg_180(angle_deg: float) -> float:
+    return (float(angle_deg) + 180.0) % 360.0 - 180.0
+
+
 @dataclass
-class RollPitchRatePController:
-    """P-only body-rate inner-loop controller for sign and gain testing."""
+class BodyRatePIDController:
+    """PID-capable body-rate inner-loop controller."""
+
+    integrator_p: float = 0.1
+    integrator_q: float = 0.1
+    integrator_r: float = 0.1
+    prev_p_meas: float | None = None
+    prev_q_meas: float | None = None
+    prev_r_meas: float | None = None
+
+    def reset(self) -> None:
+        self.integrator_p = 0.0
+        self.integrator_q = 0.0
+        self.integrator_r = 0.0
+        self.prev_p_meas = None
+        self.prev_q_meas = None
+        self.prev_r_meas = None
 
     def compute(
         self,
@@ -44,6 +62,16 @@ class RollPitchRatePController:
         kp_p: float,
         kp_q: float,
         kp_r: float,
+        ki_p: float,
+        ki_q: float,
+        ki_r: float,
+        kd_p: float,
+        kd_q: float,
+        kd_r: float,
+        integrator_limit_p: float,
+        integrator_limit_q: float,
+        integrator_limit_r: float,
+        dt_s: float,
         output_limit: float,
     ) -> ControllerResult:
         error_p = float(p_cmd_rad_s) - float(p_meas_rad_s)
@@ -51,32 +79,143 @@ class RollPitchRatePController:
         error_r = float(r_cmd_rad_s) - float(r_meas_rad_s)
         limit = abs(float(output_limit))
 
-        raw_u_roll = float(kp_p) * error_p
-        raw_u_pitch = float(kp_q) * error_q
-        raw_u_yaw = float(kp_r) * error_r
+        roll_terms = self._compute_axis(
+            error=error_p,
+            meas=float(p_meas_rad_s),
+            kp=float(kp_p),
+            ki=float(ki_p),
+            kd=float(kd_p),
+            integrator=self.integrator_p,
+            prev_meas=self.prev_p_meas,
+            integrator_limit=float(integrator_limit_p),
+            dt_s=float(dt_s),
+            output_limit=limit,
+        )
+        pitch_terms = self._compute_axis(
+            error=error_q,
+            meas=float(q_meas_rad_s),
+            kp=float(kp_q),
+            ki=float(ki_q),
+            kd=float(kd_q),
+            integrator=self.integrator_q,
+            prev_meas=self.prev_q_meas,
+            integrator_limit=float(integrator_limit_q),
+            dt_s=float(dt_s),
+            output_limit=limit,
+        )
+        yaw_terms = self._compute_axis(
+            error=error_r,
+            meas=float(r_meas_rad_s),
+            kp=float(kp_r),
+            ki=float(ki_r),
+            kd=float(kd_r),
+            integrator=self.integrator_r,
+            prev_meas=self.prev_r_meas,
+            integrator_limit=float(integrator_limit_r),
+            dt_s=float(dt_s),
+            output_limit=limit,
+        )
 
-        if limit <= 0.0:
-            u_roll = 0.0
-            u_pitch = 0.0
-            u_yaw = 0.0
-        else:
-            u_roll = max(-limit, min(limit, raw_u_roll))
-            u_pitch = max(-limit, min(limit, raw_u_pitch))
-            u_yaw = max(-limit, min(limit, raw_u_yaw))
+        self.integrator_p = float(roll_terms["integrator"])
+        self.integrator_q = float(pitch_terms["integrator"])
+        self.integrator_r = float(yaw_terms["integrator"])
+        self.prev_p_meas = float(roll_terms["prev_meas"])
+        self.prev_q_meas = float(pitch_terms["prev_meas"])
+        self.prev_r_meas = float(yaw_terms["prev_meas"])
 
         return ControllerResult(
             error_p_rad_s=error_p,
             error_q_rad_s=error_q,
             error_r_rad_s=error_r,
-            u_roll=u_roll,
-            u_pitch=u_pitch,
-            u_yaw=u_yaw,
+            p_term_roll=float(roll_terms["p_term"]),
+            i_term_roll=float(roll_terms["i_term"]),
+            d_term_roll=float(roll_terms["d_term"]),
+            p_term_pitch=float(pitch_terms["p_term"]),
+            i_term_pitch=float(pitch_terms["i_term"]),
+            d_term_pitch=float(pitch_terms["d_term"]),
+            p_term_yaw=float(yaw_terms["p_term"]),
+            i_term_yaw=float(yaw_terms["i_term"]),
+            d_term_yaw=float(yaw_terms["d_term"]),
+            u_roll=float(roll_terms["output"]),
+            u_pitch=float(pitch_terms["output"]),
+            u_yaw=float(yaw_terms["output"]),
         )
+
+    def _compute_axis(
+        self,
+        *,
+        error: float,
+        meas: float,
+        kp: float,
+        ki: float,
+        kd: float,
+        integrator: float,
+        prev_meas: float | None,
+        integrator_limit: float,
+        dt_s: float,
+        output_limit: float,
+    ) -> dict[str, float]:
+        p_term = kp * error
+        valid_dt = dt_s > 0.0
+        d_term = 0.0
+        if valid_dt and prev_meas is not None:
+            d_term = -kd * ((meas - prev_meas) / dt_s)
+
+        next_integrator = integrator
+        if valid_dt and ki != 0.0:
+            candidate_integrator = integrator + error * dt_s
+            resolved_limit = self._resolve_integrator_limit(
+                ki=ki,
+                output_limit=output_limit,
+                integrator_limit=integrator_limit,
+            )
+            candidate_integrator = self._clamp(candidate_integrator, -resolved_limit, resolved_limit)
+            candidate_i_term = ki * candidate_integrator
+            raw_output = p_term + candidate_i_term + d_term
+            clipped_output = self._clip_output(raw_output, output_limit)
+            driving_further_into_saturation = (
+                raw_output != clipped_output
+                and ((clipped_output >= output_limit and error > 0.0) or (clipped_output <= -output_limit and error < 0.0))
+            )
+            if not driving_further_into_saturation:
+                next_integrator = candidate_integrator
+
+        i_term = ki * next_integrator
+        output = self._clip_output(p_term + i_term + d_term, output_limit)
+        return {
+            "p_term": p_term,
+            "i_term": i_term,
+            "d_term": d_term,
+            "output": output,
+            "integrator": next_integrator,
+            "prev_meas": meas,
+        }
+
+    def _resolve_integrator_limit(self, *, ki: float, output_limit: float, integrator_limit: float) -> float:
+        if integrator_limit > 0.0:
+            return integrator_limit
+        if ki != 0.0 and output_limit > 0.0:
+            return output_limit / abs(ki)
+        return 0.0
+
+    def _clip_output(self, value: float, output_limit: float) -> float:
+        if output_limit <= 0.0:
+            return 0.0
+        return self._clamp(value, -output_limit, output_limit)
+
+    def _clamp(self, value: float, lower: float, upper: float) -> float:
+        return max(lower, min(upper, value))
 
 
 @dataclass
 class AngleOuterLoopController:
     config: AngleOuterLoopConfig
+    integrator_roll: float = 0.0
+    integrator_pitch: float = 0.0
+
+    def reset(self) -> None:
+        self.integrator_roll = 0.0
+        self.integrator_pitch = 0.0
 
     def compute(
         self,
@@ -85,26 +224,168 @@ class AngleOuterLoopController:
         pitch_cmd_deg: float,
         roll_meas_deg: float,
         pitch_meas_deg: float,
+        roll_rate_rad_s: float = 0.0,
+        pitch_rate_rad_s: float = 0.0,
+        dt_s: float = 0.0,
     ) -> AngleOuterLoopOutput:
-        error_roll_deg = float(roll_cmd_deg) - float(roll_meas_deg)
-        error_pitch_deg = float(pitch_cmd_deg) - float(pitch_meas_deg)
+        roll_cmd_rad = math.radians(float(roll_cmd_deg))
+        pitch_cmd_rad = math.radians(float(pitch_cmd_deg))
+        roll_meas_rad = math.radians(float(roll_meas_deg))
+        pitch_meas_rad = math.radians(float(pitch_meas_deg))
+        error_roll_rad = roll_cmd_rad - roll_meas_rad
+        error_pitch_rad = pitch_cmd_rad - pitch_meas_rad
+        # First version: use body-rate p/q as measured roll/pitch rates for the
+        # outer-loop D term. The pipeline boundary can swap these for true Euler
+        # roll/pitch rates later without changing this controller API.
         limit = abs(float(self.config.rate_limit_rad_s))
-
-        raw_p_cmd = float(self.config.kp_roll_angle) * error_roll_deg
-        raw_q_cmd = float(self.config.kp_pitch_angle) * error_pitch_deg
-
-        if limit <= 0.0:
-            p_cmd = 0.0
-            q_cmd = 0.0
-        else:
-            p_cmd = max(-limit, min(limit, raw_p_cmd))
-            q_cmd = max(-limit, min(limit, raw_q_cmd))
+        p_cmd, next_integrator_roll = self._compute_axis(
+            error_rad=error_roll_rad,
+            measured_rate_rad_s=float(roll_rate_rad_s),
+            kp=self._convert_gain_per_deg(float(self.config.kp_roll_angle)),
+            ki=self._convert_gain_per_deg(float(self.config.ki_roll_angle)),
+            kd=float(self.config.kd_roll_angle),
+            integrator=self.integrator_roll,
+            integrator_limit=float(self.config.integrator_limit_roll),
+            dt_s=float(dt_s),
+            output_limit=limit,
+        )
+        q_cmd, next_integrator_pitch = self._compute_axis(
+            error_rad=error_pitch_rad,
+            measured_rate_rad_s=float(pitch_rate_rad_s),
+            kp=self._convert_gain_per_deg(float(self.config.kp_pitch_angle)),
+            ki=self._convert_gain_per_deg(float(self.config.ki_pitch_angle)),
+            kd=float(self.config.kd_pitch_angle),
+            integrator=self.integrator_pitch,
+            integrator_limit=float(self.config.integrator_limit_pitch),
+            dt_s=float(dt_s),
+            output_limit=limit,
+        )
+        self.integrator_roll = next_integrator_roll
+        self.integrator_pitch = next_integrator_pitch
 
         return AngleOuterLoopOutput(
-            roll_error_deg=error_roll_deg,
-            pitch_error_deg=error_pitch_deg,
+            roll_error_deg=math.degrees(error_roll_rad),
+            pitch_error_deg=math.degrees(error_pitch_rad),
             p_cmd_rad_s=p_cmd,
             q_cmd_rad_s=q_cmd,
+        )
+
+    def _compute_axis(
+        self,
+        *,
+        error_rad: float,
+        measured_rate_rad_s: float,
+        kp: float,
+        ki: float,
+        kd: float,
+        integrator: float,
+        integrator_limit: float,
+        dt_s: float,
+        output_limit: float,
+    ) -> tuple[float, float]:
+        p_term = kp * error_rad
+        d_term = -kd * measured_rate_rad_s
+        valid_dt = dt_s > 0.0
+        next_integrator = integrator
+        if valid_dt and ki != 0.0:
+            candidate_integrator = integrator + error_rad * dt_s
+            resolved_limit = self._resolve_integrator_limit(
+                ki=ki,
+                output_limit=output_limit,
+                integrator_limit=integrator_limit,
+            )
+            candidate_integrator = self._clamp(candidate_integrator, -resolved_limit, resolved_limit)
+            candidate_i_term = ki * candidate_integrator
+            raw_output = p_term + candidate_i_term + d_term
+            clipped_output = self._clip_output(raw_output, output_limit)
+            driving_further_into_saturation = (
+                raw_output != clipped_output
+                and ((clipped_output >= output_limit and error_rad > 0.0) or (clipped_output <= -output_limit and error_rad < 0.0))
+            )
+            if not driving_further_into_saturation:
+                next_integrator = candidate_integrator
+
+        i_term = ki * next_integrator
+        output = self._clip_output(p_term + i_term + d_term, output_limit)
+        return (output, next_integrator)
+
+    def _convert_gain_per_deg(self, gain_per_deg: float) -> float:
+        return gain_per_deg * (180.0 / math.pi)
+
+    def _resolve_integrator_limit(self, *, ki: float, output_limit: float, integrator_limit: float) -> float:
+        if integrator_limit > 0.0:
+            return integrator_limit
+        if ki != 0.0 and output_limit > 0.0:
+            return output_limit / abs(ki)
+        return 0.0
+
+    def _clip_output(self, value: float, output_limit: float) -> float:
+        if output_limit <= 0.0:
+            return 0.0
+        return self._clamp(value, -output_limit, output_limit)
+
+    def _clamp(self, value: float, lower: float, upper: float) -> float:
+        return max(lower, min(upper, value))
+
+
+@dataclass
+class YawOuterLoopController:
+    config: YawOuterLoopConfig
+
+    def compute(self, *, yaw_cmd_deg: float, heading_deg: float) -> YawOuterLoopOutput:
+        yaw_error_deg = wrap_deg_180(float(yaw_cmd_deg) - float(heading_deg))
+        raw_r_cmd = float(self.config.kp_yaw) * math.radians(yaw_error_deg)
+        limit = abs(float(self.config.yaw_rate_limit_rad_s))
+        if limit <= 0.0:
+            r_cmd_rad_s = 0.0
+        else:
+            r_cmd_rad_s = max(-limit, min(limit, raw_r_cmd))
+        return YawOuterLoopOutput(
+            yaw_error_deg=yaw_error_deg,
+            r_cmd_rad_s=r_cmd_rad_s,
+            yaw_cmd_deg=float(yaw_cmd_deg),
+            heading_deg=float(heading_deg),
+        )
+
+
+@dataclass
+class BodyVelocityOuterLoopController:
+    config: BodyVelocityOuterLoopConfig
+
+    def reset(self) -> None:
+        return None
+
+    def compute(
+        self,
+        *,
+        v_forward_cmd_m_s: float,
+        v_right_cmd_m_s: float,
+        vx_body_m_s: float,
+        vy_body_m_s: float,
+    ) -> BodyVelocityOuterLoopOutput:
+        v_forward_error_m_s = float(v_forward_cmd_m_s) - float(vx_body_m_s)
+        v_right_error_m_s = float(v_right_cmd_m_s) - float(vy_body_m_s)
+        limit_deg = abs(float(self.config.velocity_angle_limit_deg))
+
+        # TODO: Confirm the final sign against flight test data. This mapping keeps
+        # the sign explicit for now: forward error drives pitch, right error drives roll.
+        raw_pitch_cmd_deg = float(self.config.kp_v_forward) * v_forward_error_m_s
+        raw_roll_cmd_deg = float(self.config.kp_v_right) * v_right_error_m_s
+
+        if limit_deg <= 0.0:
+            pitch_cmd_deg = 0.0
+            roll_cmd_deg = 0.0
+        else:
+            pitch_cmd_deg = max(-limit_deg, min(limit_deg, raw_pitch_cmd_deg))
+            roll_cmd_deg = max(-limit_deg, min(limit_deg, raw_roll_cmd_deg))
+
+        return BodyVelocityOuterLoopOutput(
+            v_forward_cmd_m_s=float(v_forward_cmd_m_s),
+            v_right_cmd_m_s=float(v_right_cmd_m_s),
+            v_forward_error_m_s=v_forward_error_m_s,
+            v_right_error_m_s=v_right_error_m_s,
+            pitch_cmd_from_velocity_deg=pitch_cmd_deg,
+            roll_cmd_from_velocity_deg=roll_cmd_deg,
         )
 
 
@@ -126,123 +407,71 @@ class AltitudeOuterLoopController:
 
 
 @dataclass
-class VerticalSpeedPController:
-    """P-only vertical-speed controller that outputs a collective correction."""
+class VerticalSpeedPIDController:
+    """PID-capable vertical-speed controller that outputs a collective correction."""
 
     config: AltitudeControlConfig
+    integrator_vz: float = 0.0
+    prev_vz_meas: float | None = None
 
     def reset(self) -> None:
-        return None
+        self.integrator_vz = 0.0
+        self.prev_vz_meas = None
 
     def compute(
         self,
         *,
         vz_cmd_m_s: float,
         vz_m_s: float,
+        dt_s: float,
         hover_throttle: float,
-    ) -> tuple[float, float, float]:
+    ) -> tuple[float, float, float, float, float, float]:
         vz_error_m_s = float(vz_cmd_m_s) - float(vz_m_s)
-        throttle_correction = float(self.config.kp_vz) * vz_error_m_s
+        valid_dt = float(dt_s) > 0.0
+        p_term = float(self.config.kp_vz) * vz_error_m_s
+        d_term = 0.0
+        if valid_dt and self.prev_vz_meas is not None:
+            d_term = -float(self.config.kd_vz) * ((float(vz_m_s) - self.prev_vz_meas) / float(dt_s))
+
+        if valid_dt and float(self.config.ki_vz) != 0.0:
+            candidate_integrator = self.integrator_vz + vz_error_m_s * float(dt_s)
+            limit = self._resolve_integrator_limit()
+            candidate_integrator = self._clamp(candidate_integrator, -limit, limit)
+            candidate_i_term = float(self.config.ki_vz) * candidate_integrator
+            raw_correction = p_term + candidate_i_term + d_term
+            clipped_correction = self._clamp_to_throttle_bounds(raw_correction, hover_throttle)
+            driving_further_into_saturation = (
+                raw_correction != clipped_correction
+                and (
+                    (float(hover_throttle) + clipped_correction >= float(self.config.throttle_max) and vz_error_m_s > 0.0)
+                    or (float(hover_throttle) + clipped_correction <= float(self.config.throttle_min) and vz_error_m_s < 0.0)
+                )
+            )
+            if not driving_further_into_saturation:
+                self.integrator_vz = candidate_integrator
+
+        i_term = float(self.config.ki_vz) * self.integrator_vz
+        throttle_correction = p_term + i_term + d_term
         throttle_cmd = max(
             float(self.config.throttle_min),
             min(float(self.config.throttle_max), float(hover_throttle) + throttle_correction),
         )
-        return (vz_error_m_s, throttle_correction, throttle_cmd)
+        self.prev_vz_meas = float(vz_m_s)
+        return (vz_error_m_s, p_term, i_term, d_term, throttle_correction, throttle_cmd)
 
+    def _resolve_integrator_limit(self) -> float:
+        if float(self.config.vz_integrator_limit) > 0.0:
+            return float(self.config.vz_integrator_limit)
+        if float(self.config.ki_vz) != 0.0:
+            return (float(self.config.throttle_max) - float(self.config.throttle_min)) / abs(float(self.config.ki_vz))
+        return 0.0
 
-@dataclass
-class CascadedRollPitchController:
-    rate_controller: RollPitchRatePController
-    angle_controller: AngleOuterLoopController
+    def _clamp(self, value: float, lower: float, upper: float) -> float:
+        return max(lower, min(upper, value))
 
-    def set_outer_loop_config(self, config: AngleOuterLoopConfig) -> None:
-        self.angle_controller.config = config
-
-    def compute(
-        self,
-        *,
-        telemetry: RollRateTelemetry,
-        angle_command: AngleCommand,
-        rate_command: RollRateTestCommand,
-        outer_config: AngleOuterLoopConfig | None = None,
-    ) -> tuple[AngleOuterLoopOutput, ControllerResult]:
-        outer_loop = self._compute_outer_loop(
-            telemetry=telemetry,
-            angle_command=angle_command,
-            outer_config=outer_config,
-        )
-        controller_result = self.rate_controller.compute(
-            p_cmd_rad_s=outer_loop.p_cmd_rad_s,
-            q_cmd_rad_s=outer_loop.q_cmd_rad_s,
-            r_cmd_rad_s=rate_command.r_cmd_rad_s,
-            p_meas_rad_s=telemetry.p_meas_rad_s,
-            q_meas_rad_s=telemetry.q_meas_rad_s,
-            r_meas_rad_s=telemetry.r_meas_rad_s,
-            kp_p=rate_command.kp_p,
-            kp_q=rate_command.kp_q,
-            kp_r=rate_command.kp_r,
-            output_limit=rate_command.output_limit,
-        )
-        return (outer_loop, controller_result)
-
-    def _compute_outer_loop(
-        self,
-        *,
-        telemetry: RollRateTelemetry,
-        angle_command: AngleCommand,
-        outer_config: AngleOuterLoopConfig | None = None,
-    ) -> AngleOuterLoopOutput:
-        controller = self.angle_controller if outer_config is None else AngleOuterLoopController(config=outer_config)
-        return controller.compute(
-            roll_cmd_deg=angle_command.roll_cmd_deg,
-            pitch_cmd_deg=angle_command.pitch_cmd_deg,
-            roll_meas_deg=telemetry.roll_deg,
-            pitch_meas_deg=telemetry.pitch_deg,
-        )
-
-
-@dataclass
-class CascadedAltitudeController:
-    """Altitude outer loop feeding a vertical-speed inner loop."""
-
-    altitude_outer_controller: AltitudeOuterLoopController
-    vertical_speed_controller: VerticalSpeedPController
-
-    def set_config(self, config: AltitudeControlConfig) -> None:
-        self.altitude_outer_controller.config = config
-        self.vertical_speed_controller.config = config
-
-    def reset(self) -> None:
-        self.vertical_speed_controller.reset()
-
-    def compute(
-        self,
-        *,
-        telemetry: RollRateTelemetry,
-        altitude_command: AltitudeCommand,
-        config: AltitudeControlConfig | None = None,
-    ) -> AltitudeLoopOutput:
-        outer_controller = AltitudeOuterLoopController(config=config) if config is not None else self.altitude_outer_controller
-        inner_controller = VerticalSpeedPController(config=config) if config is not None else self.vertical_speed_controller
-        alt_cmd_m = float(altitude_command.alt_cmd_m)
-        alt_error_m, vz_cmd_m_s = outer_controller.compute(
-            alt_cmd_m=alt_cmd_m,
-            alt_m=telemetry.alt_m,
-        )
-        vz_error_m_s, throttle_correction, throttle_cmd = inner_controller.compute(
-            vz_cmd_m_s=vz_cmd_m_s,
-            vz_m_s=telemetry.vz_m_s,
-            hover_throttle=altitude_command.hover_throttle,
-        )
-
-        return AltitudeLoopOutput(
-            alt_cmd_m=alt_cmd_m,
-            alt_m=telemetry.alt_m,
-            vz_m_s=telemetry.vz_m_s,
-            alt_error_m=alt_error_m,
-            vz_cmd_m_s=vz_cmd_m_s,
-            vz_error_m_s=vz_error_m_s,
-            throttle_correction=throttle_correction,
-            throttle_cmd=throttle_cmd,
-            integrator_state=0.0,
+    def _clamp_to_throttle_bounds(self, correction: float, hover_throttle: float) -> float:
+        return self._clamp(
+            float(correction),
+            float(self.config.throttle_min) - float(hover_throttle),
+            float(self.config.throttle_max) - float(hover_throttle),
         )

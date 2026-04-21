@@ -10,8 +10,11 @@ try:
         AltitudeControlConfig,
         AngleCommand,
         AngleOuterLoopConfig,
+        BodyVelocityCommand,
+        BodyVelocityOuterLoopConfig,
         RollRateTestCommand,
         RollRateTestState,
+        YawOuterLoopConfig,
     )
     from runtime.settings_store import load_settings, save_settings
     from runtime.test_runtime import RollRateInnerLoopRuntime
@@ -21,8 +24,11 @@ except ImportError:
         AltitudeControlConfig,
         AngleCommand,
         AngleOuterLoopConfig,
+        BodyVelocityCommand,
+        BodyVelocityOuterLoopConfig,
         RollRateTestCommand,
         RollRateTestState,
+        YawOuterLoopConfig,
     )
     from .settings_store import load_settings, save_settings
     from .test_runtime import RollRateInnerLoopRuntime
@@ -136,11 +142,26 @@ class RuntimeService:
     def set_outer_loop_config(self, config: AngleOuterLoopConfig) -> None:
         self._call_locked(self.core.set_outer_loop_config, config, persist=True)
 
+    def set_body_velocity_command(self, command: BodyVelocityCommand) -> None:
+        self._call_locked(self.core.set_body_velocity_command, command, persist=True)
+
+    def set_body_velocity_outer_loop_config(self, config: BodyVelocityOuterLoopConfig) -> None:
+        self._call_locked(self.core.set_body_velocity_outer_loop_config, config, persist=True)
+
+    def set_yaw_outer_loop_config(self, config: YawOuterLoopConfig) -> None:
+        self._call_locked(self.core.set_yaw_outer_loop_config, config, persist=True)
+
     def start_outer_loop(self) -> None:
         self._call_locked(self.core.start_outer_loop)
 
     def stop_outer_loop(self) -> None:
         self._call_locked(self.core.stop_outer_loop)
+
+    def start_body_velocity_outer_loop(self) -> None:
+        self._call_locked(self.core.start_body_velocity_outer_loop)
+
+    def stop_body_velocity_outer_loop(self) -> None:
+        self._call_locked(self.core.stop_body_velocity_outer_loop)
 
     def set_altitude_command(self, altitude_command: AltitudeCommand) -> None:
         self._call_locked(self.core.set_altitude_command, altitude_command, persist=True)
@@ -203,6 +224,15 @@ class RuntimeService:
                 kp_p=float(command.get("kp_p", 0.0)),
                 kp_q=float(command.get("kp_q", 0.0)),
                 kp_r=float(command.get("kp_r", 0.0)),
+                ki_p=float(command.get("ki_p", 0.0)),
+                ki_q=float(command.get("ki_q", 0.0)),
+                ki_r=float(command.get("ki_r", 0.0)),
+                kd_p=float(command.get("kd_p", 0.0)),
+                kd_q=float(command.get("kd_q", 0.0)),
+                kd_r=float(command.get("kd_r", 0.0)),
+                integrator_limit_p=float(command.get("integrator_limit_p", 0.0)),
+                integrator_limit_q=float(command.get("integrator_limit_q", 0.0)),
+                integrator_limit_r=float(command.get("integrator_limit_r", 0.0)),
                 output_limit=float(command.get("output_limit", 0.0)),
             )
         )
@@ -212,6 +242,15 @@ class RuntimeService:
             AngleCommand(
                 roll_cmd_deg=float(angle_command.get("roll_cmd_deg", 0.0)),
                 pitch_cmd_deg=float(angle_command.get("pitch_cmd_deg", 0.0)),
+                yaw_cmd_deg=float(angle_command.get("yaw_cmd_deg", 0.0)),
+            )
+        )
+
+        body_velocity_command = settings.get("body_velocity_command", {})
+        self.core.set_body_velocity_command(
+            BodyVelocityCommand(
+                v_forward_cmd_m_s=float(body_velocity_command.get("v_forward_cmd_m_s", 0.0)),
+                v_right_cmd_m_s=float(body_velocity_command.get("v_right_cmd_m_s", 0.0)),
             )
         )
 
@@ -220,7 +259,30 @@ class RuntimeService:
             AngleOuterLoopConfig(
                 kp_roll_angle=float(outer_config.get("kp_roll_angle", 0.0)),
                 kp_pitch_angle=float(outer_config.get("kp_pitch_angle", 0.0)),
+                ki_roll_angle=float(outer_config.get("ki_roll_angle", 0.0)),
+                ki_pitch_angle=float(outer_config.get("ki_pitch_angle", 0.0)),
+                kd_roll_angle=float(outer_config.get("kd_roll_angle", 0.0)),
+                kd_pitch_angle=float(outer_config.get("kd_pitch_angle", 0.0)),
+                integrator_limit_roll=float(outer_config.get("integrator_limit_roll", 0.0)),
+                integrator_limit_pitch=float(outer_config.get("integrator_limit_pitch", 0.0)),
                 rate_limit_rad_s=float(outer_config.get("rate_limit_rad_s", 0.0)),
+            )
+        )
+
+        body_velocity_outer_config = settings.get("body_velocity_outer_config", {})
+        self.core.set_body_velocity_outer_loop_config(
+            BodyVelocityOuterLoopConfig(
+                kp_v_forward=float(body_velocity_outer_config.get("kp_v_forward", 0.0)),
+                kp_v_right=float(body_velocity_outer_config.get("kp_v_right", 0.0)),
+                velocity_angle_limit_deg=float(body_velocity_outer_config.get("velocity_angle_limit_deg", 10.0)),
+            )
+        )
+
+        yaw_outer_config = settings.get("yaw_outer_config", {})
+        self.core.set_yaw_outer_loop_config(
+            YawOuterLoopConfig(
+                kp_yaw=float(yaw_outer_config.get("kp_yaw", 0.0)),
+                yaw_rate_limit_rad_s=float(yaw_outer_config.get("yaw_rate_limit_rad_s", 1.0)),
             )
         )
 
@@ -239,6 +301,8 @@ class RuntimeService:
                 vz_max=float(altitude_config.get("vz_max", 0.0)),
                 kp_vz=float(altitude_config.get("kp_vz", 0.0)),
                 ki_vz=float(altitude_config.get("ki_vz", 0.0)),
+                kd_vz=float(altitude_config.get("kd_vz", 0.0)),
+                vz_integrator_limit=float(altitude_config.get("vz_integrator_limit", 0.0)),
                 throttle_min=float(altitude_config.get("throttle_min", 0.0)),
                 throttle_max=float(altitude_config.get("throttle_max", 0.0)),
             )
@@ -265,16 +329,45 @@ class RuntimeService:
                     "kp_p": snapshot.command.kp_p,
                     "kp_q": snapshot.command.kp_q,
                     "kp_r": snapshot.command.kp_r,
+                    "ki_p": snapshot.command.ki_p,
+                    "ki_q": snapshot.command.ki_q,
+                    "ki_r": snapshot.command.ki_r,
+                    "kd_p": snapshot.command.kd_p,
+                    "kd_q": snapshot.command.kd_q,
+                    "kd_r": snapshot.command.kd_r,
+                    "integrator_limit_p": snapshot.command.integrator_limit_p,
+                    "integrator_limit_q": snapshot.command.integrator_limit_q,
+                    "integrator_limit_r": snapshot.command.integrator_limit_r,
                     "output_limit": snapshot.command.output_limit,
                 },
                 "angle_command": {
                     "roll_cmd_deg": snapshot.angle_command.roll_cmd_deg,
                     "pitch_cmd_deg": snapshot.angle_command.pitch_cmd_deg,
+                    "yaw_cmd_deg": snapshot.angle_command.yaw_cmd_deg,
+                },
+                "body_velocity_command": {
+                    "v_forward_cmd_m_s": snapshot.body_velocity_command.v_forward_cmd_m_s,
+                    "v_right_cmd_m_s": snapshot.body_velocity_command.v_right_cmd_m_s,
                 },
                 "outer_config": {
                     "kp_roll_angle": snapshot.outer_loop_config.kp_roll_angle,
                     "kp_pitch_angle": snapshot.outer_loop_config.kp_pitch_angle,
+                    "ki_roll_angle": snapshot.outer_loop_config.ki_roll_angle,
+                    "ki_pitch_angle": snapshot.outer_loop_config.ki_pitch_angle,
+                    "kd_roll_angle": snapshot.outer_loop_config.kd_roll_angle,
+                    "kd_pitch_angle": snapshot.outer_loop_config.kd_pitch_angle,
+                    "integrator_limit_roll": snapshot.outer_loop_config.integrator_limit_roll,
+                    "integrator_limit_pitch": snapshot.outer_loop_config.integrator_limit_pitch,
                     "rate_limit_rad_s": snapshot.outer_loop_config.rate_limit_rad_s,
+                },
+                "body_velocity_outer_config": {
+                    "kp_v_forward": snapshot.body_velocity_outer_loop_config.kp_v_forward,
+                    "kp_v_right": snapshot.body_velocity_outer_loop_config.kp_v_right,
+                    "velocity_angle_limit_deg": snapshot.body_velocity_outer_loop_config.velocity_angle_limit_deg,
+                },
+                "yaw_outer_config": {
+                    "kp_yaw": snapshot.yaw_outer_loop_config.kp_yaw,
+                    "yaw_rate_limit_rad_s": snapshot.yaw_outer_loop_config.yaw_rate_limit_rad_s,
                 },
                 "altitude_command": {
                     "alt_cmd_m": snapshot.altitude_command.alt_cmd_m,
@@ -285,6 +378,8 @@ class RuntimeService:
                     "vz_max": snapshot.altitude_control_config.vz_max,
                     "kp_vz": snapshot.altitude_control_config.kp_vz,
                     "ki_vz": snapshot.altitude_control_config.ki_vz,
+                    "kd_vz": snapshot.altitude_control_config.kd_vz,
+                    "vz_integrator_limit": snapshot.altitude_control_config.vz_integrator_limit,
                     "throttle_min": snapshot.altitude_control_config.throttle_min,
                     "throttle_max": snapshot.altitude_control_config.throttle_max,
                 },
