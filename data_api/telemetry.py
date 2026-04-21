@@ -9,7 +9,7 @@ from .models import RollRateTelemetry
 
 
 class RollRateTelemetryReader:
-    """Read telemetry needed for attitude and altitude loop testing."""
+    """Read telemetry needed for attitude, velocity, and altitude loop testing."""
 
     def __init__(self, hardware: KrpcQuadHardware) -> None:
         self.hardware = hardware
@@ -30,8 +30,8 @@ class RollRateTelemetryReader:
         body = self.hardware.body
         conn = self.hardware.conn
 
-        vessel_rf = vessel.reference_frame
         body_rf = body.reference_frame
+        vessel_rf = vessel.reference_frame
 
         body_axes_surface_rate_rf = conn.space_center.ReferenceFrame.create_hybrid(
             position=vessel_rf,
@@ -50,7 +50,6 @@ class RollRateTelemetryReader:
             "vertical_speed": conn.add_stream(getattr, flight_default, "vertical_speed"),
             "position_body_m": conn.add_stream(vessel.position, body_rf),
             "velocity_body_m_s": conn.add_stream(vessel.velocity, body_rf),
-            "velocity_body_axes_m_s": conn.add_stream(vessel.velocity, body_axes_surface_rate_rf),
             "body_rates_rfd_rad_s": conn.add_stream(vessel.angular_velocity, body_axes_surface_rate_rf),
         }
         self._last_timestamp_s = None
@@ -78,23 +77,27 @@ class RollRateTelemetryReader:
         ground_speed_m_s = self._sanitize_scalar(float(self.streams["horizontal_speed"]()))
         raw_vz_m_s = self._sanitize_scalar(float(self.streams["vertical_speed"]()))
         position_body_m = self._sanitize_vector(tuple(self.streams["position_body_m"]()))
-                
-                # 已有
         velocity_body_m_s = self._sanitize_vector(tuple(self.streams["velocity_body_m_s"]()))
-
-        # 新增：只旋转向量，不重新定义“速度相对于谁”
+        # Body velocity source: rotate the existing body-frame velocity vector
+        # into the vessel axes without redefining what the velocity is relative to.
         assert self.hardware.conn is not None
-        vessel_rf = self.hardware.vessel.reference_frame
-        body_rf = self.hardware.body.reference_frame
+        velocity_body_axes_rfd_m_s = self._sanitize_vector(
+            self.hardware.conn.space_center.transform_direction(
+                velocity_body_m_s,
+                self.hardware.body.reference_frame,
+                self.hardware.vessel.reference_frame,
+            )
+        )
+        velocity_body_axes_frd_m_s = self._rfd_to_frd(velocity_body_axes_rfd_m_s)
 
-        velocity_body_axes_rfd_m_s = self.hardware.conn.space_center.transform_direction(
-            velocity_body_m_s,
-            body_rf,
-            vessel_rf,
+        # UNE = up / north / east. These are the raw navigation feedback terms.
+        # They are preserved separately from the controller-facing horizontal
+        # plane and will be translated later by the runtime mapper.
+        v_up_une_m_s, v_north_une_m_s, v_east_une_m_s = self._surface_une_velocity_from_vectors(
+            position_body_m=position_body_m,
+            velocity_body_m_s=velocity_body_m_s,
         )
 
-        velocity_body_axes_frd_m_s = self._rfd_to_frd(velocity_body_axes_rfd_m_s)
-        
         dt_s = self._compute_dt(timestamp_s)
         vz_m_s = self._surface_vertical_speed_from_vectors(
             position_body_m=position_body_m,
@@ -119,6 +122,9 @@ class RollRateTelemetryReader:
             yaw_rate_deg_s=yaw_rate_deg_s,
             alt_m=alt_m,
             vz_m_s=vz_m_s,
+            v_up_une_m_s=v_up_une_m_s,
+            v_north_une_m_s=v_north_une_m_s,
+            v_east_une_m_s=v_east_une_m_s,
             vx_body_m_s=velocity_body_axes_frd_m_s[0],
             vy_body_m_s=velocity_body_axes_frd_m_s[1],
             vz_body_m_s=velocity_body_axes_frd_m_s[2],
@@ -150,6 +156,32 @@ class RollRateTelemetryReader:
         if up_vector is None:
             return fallback_vz_m_s
         return self._dot3(velocity_body_m_s, up_vector)
+
+    def _surface_une_velocity_from_vectors(
+        self,
+        *,
+        position_body_m: tuple[float, float, float],
+        velocity_body_m_s: tuple[float, float, float],
+    ) -> tuple[float, float, float]:
+        up_vector = self._normalize_vector(position_body_m)
+        if up_vector is None:
+            return (0.0, 0.0, 0.0)
+
+        # The current body reference frame is surface-relative. We derive local
+        # north/east from the body's north-pole axis plus the local radial up.
+        north_pole_axis = (0.0, 1.0, 0.0)
+        east_vector = self._normalize_vector(self._cross3(north_pole_axis, up_vector))
+        if east_vector is None:
+            return (0.0, 0.0, 0.0)
+        north_vector = self._normalize_vector(self._cross3(up_vector, east_vector))
+        if north_vector is None:
+            return (0.0, 0.0, 0.0)
+
+        return (
+            self._dot3(velocity_body_m_s, up_vector),
+            self._dot3(velocity_body_m_s, north_vector),
+            self._dot3(velocity_body_m_s, east_vector),
+        )
 
     def _derive_euler_rates(
         self,
@@ -189,6 +221,13 @@ class RollRateTelemetryReader:
 
     def _dot3(self, a: tuple[float, float, float], b: tuple[float, float, float]) -> float:
         return self._sanitize_scalar(a[0] * b[0] + a[1] * b[1] + a[2] * b[2])
+
+    def _cross3(self, a: tuple[float, float, float], b: tuple[float, float, float]) -> tuple[float, float, float]:
+        return (
+            a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0],
+        )
 
     def _sanitize_scalar(self, value: float) -> float:
         if not math.isfinite(value):

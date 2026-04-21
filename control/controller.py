@@ -11,6 +11,7 @@ try:
         BodyVelocityOuterLoopConfig,
         BodyVelocityOuterLoopOutput,
         ControllerResult,
+        WorldToBodyVelocityProjectionOutput,
         YawOuterLoopConfig,
         YawOuterLoopOutput,
     )
@@ -22,6 +23,7 @@ except ImportError:
         BodyVelocityOuterLoopConfig,
         BodyVelocityOuterLoopOutput,
         ControllerResult,
+        WorldToBodyVelocityProjectionOutput,
         YawOuterLoopConfig,
         YawOuterLoopOutput,
     )
@@ -35,9 +37,9 @@ def wrap_deg_180(angle_deg: float) -> float:
 class BodyRatePIDController:
     """PID-capable body-rate inner-loop controller."""
 
-    integrator_p: float = 0.1
-    integrator_q: float = 0.1
-    integrator_r: float = 0.1
+    integrator_p: float = 0.0
+    integrator_q: float = 0.0
+    integrator_r: float = 0.0
     prev_p_meas: float | None = None
     prev_q_meas: float | None = None
     prev_r_meas: float | None = None
@@ -234,9 +236,6 @@ class AngleOuterLoopController:
         pitch_meas_rad = math.radians(float(pitch_meas_deg))
         error_roll_rad = roll_cmd_rad - roll_meas_rad
         error_pitch_rad = pitch_cmd_rad - pitch_meas_rad
-        # First version: use body-rate p/q as measured roll/pitch rates for the
-        # outer-loop D term. The pipeline boundary can swap these for true Euler
-        # roll/pitch rates later without changing this controller API.
         limit = abs(float(self.config.rate_limit_rad_s))
         p_cmd, next_integrator_roll = self._compute_axis(
             error_rad=error_roll_rad,
@@ -367,8 +366,7 @@ class BodyVelocityOuterLoopController:
         v_right_error_m_s = float(v_right_cmd_m_s) - float(vy_body_m_s)
         limit_deg = abs(float(self.config.velocity_angle_limit_deg))
 
-        # TODO: Confirm the final sign against flight test data. This mapping keeps
-        # the sign explicit for now: forward error drives pitch, right error drives roll.
+        # TODO: Confirm the final flight-test sign against the craft convention.
         raw_pitch_cmd_deg = float(self.config.kp_v_forward) * v_forward_error_m_s
         raw_roll_cmd_deg = float(self.config.kp_v_right) * v_right_error_m_s
 
@@ -390,9 +388,37 @@ class BodyVelocityOuterLoopController:
 
 
 @dataclass
-class AltitudeOuterLoopController:
-    """Retained for future altitude outer-loop work."""
+class WorldToBodyVelocityProjection:
+    """
+    Debug-only horizontal world-to-body velocity projection.
 
+    This helper is kept for the existing command-side projection chain. It is
+    not the raw UNE feedback source and it is not the full velocity outer loop.
+    """
+
+    def compute(
+        self,
+        *,
+        v_north_cmd_m_s: float,
+        v_east_cmd_m_s: float,
+        heading_deg: float,
+    ) -> WorldToBodyVelocityProjectionOutput:
+        heading_rad = math.radians(float(heading_deg))
+        north_cmd = float(v_north_cmd_m_s)
+        east_cmd = float(v_east_cmd_m_s)
+        # TODO: Confirm the final flight-test sign against the craft convention.
+        # Current assumption: heading 0 deg points body-forward north, positive
+        # body-right points east when heading is 0 deg.
+        v_forward_cmd = north_cmd * math.cos(heading_rad) + east_cmd * math.sin(heading_rad)
+        v_right_cmd = -north_cmd * math.sin(heading_rad) + east_cmd * math.cos(heading_rad)
+        return WorldToBodyVelocityProjectionOutput(
+            v_forward_cmd_from_world_m_s=v_forward_cmd,
+            v_right_cmd_from_world_m_s=v_right_cmd,
+        )
+
+
+@dataclass
+class AltitudeOuterLoopController:
     config: AltitudeControlConfig
 
     def compute(self, *, alt_cmd_m: float, alt_m: float) -> tuple[float, float]:
@@ -408,8 +434,6 @@ class AltitudeOuterLoopController:
 
 @dataclass
 class VerticalSpeedPIDController:
-    """PID-capable vertical-speed controller that outputs a collective correction."""
-
     config: AltitudeControlConfig
     integrator_vz: float = 0.0
     prev_vz_meas: float | None = None

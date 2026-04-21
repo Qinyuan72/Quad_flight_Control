@@ -8,9 +8,11 @@ try:
         BodyRatePIDController,
         AngleOuterLoopController,
         BodyVelocityOuterLoopController,
+        WorldToBodyVelocityProjection,
         VerticalSpeedPIDController,
         YawOuterLoopController,
     )
+    from control.horizontal_frame_mapper import UneToControlPlaneMapper
     from control.mixer import MatrixMixer, check_yaw_sign_consistency
     from control.mixer_presets import get_candidate, list_candidates
     from control.pipelines import AltitudeControlPipeline, AttitudeControlPipeline
@@ -26,6 +28,7 @@ try:
         BodyVelocityCommand,
         BodyVelocityOuterLoopConfig,
         BodyVelocityOuterLoopOutput,
+        ControlPlaneVelocityDebug,
         BodyRateCommand,
         BodyRatePIDConfig,
         ControllerResult,
@@ -33,6 +36,10 @@ try:
         RollRateTelemetry,
         RollRateTestCommand,
         RollRateTestState,
+        UneToControlPlaneConfig,
+        WorldCommandPreprocessConfig,
+        WorldToBodyVelocityProjectionOutput,
+        WorldVelocityCommand,
         YawOuterLoopConfig,
         YawOuterLoopOutput,
     )
@@ -43,9 +50,11 @@ except ImportError:
         BodyRatePIDController,
         AngleOuterLoopController,
         BodyVelocityOuterLoopController,
+        WorldToBodyVelocityProjection,
         VerticalSpeedPIDController,
         YawOuterLoopController,
     )
+    from ..control.horizontal_frame_mapper import UneToControlPlaneMapper
     from ..control.mixer import MatrixMixer, check_yaw_sign_consistency
     from ..control.mixer_presets import get_candidate, list_candidates
     from ..control.pipelines import AltitudeControlPipeline, AttitudeControlPipeline
@@ -61,6 +70,7 @@ except ImportError:
         BodyVelocityCommand,
         BodyVelocityOuterLoopConfig,
         BodyVelocityOuterLoopOutput,
+        ControlPlaneVelocityDebug,
         BodyRateCommand,
         BodyRatePIDConfig,
         ControllerResult,
@@ -68,6 +78,10 @@ except ImportError:
         RollRateTelemetry,
         RollRateTestCommand,
         RollRateTestState,
+        UneToControlPlaneConfig,
+        WorldCommandPreprocessConfig,
+        WorldToBodyVelocityProjectionOutput,
+        WorldVelocityCommand,
         YawOuterLoopConfig,
         YawOuterLoopOutput,
     )
@@ -80,6 +94,8 @@ class RollRateInnerLoopRuntime:
     def __init__(self) -> None:
         self.hardware = KrpcQuadHardware()
         self.telemetry = RollRateTelemetryReader(self.hardware)
+        self.world_velocity_projection = WorldToBodyVelocityProjection()
+        self.une_to_control_plane_mapper = UneToControlPlaneMapper()
         self.attitude_pipeline = AttitudeControlPipeline(
             body_velocity_controller=BodyVelocityOuterLoopController(
                 config=BodyVelocityOuterLoopConfig(
@@ -158,6 +174,11 @@ class RollRateInnerLoopRuntime:
         self.body_rate_command, self.body_rate_config = self._split_legacy_rate_command(self.command)
         self.angle_command = AngleCommand()
         self.body_velocity_command = BodyVelocityCommand()
+        self.world_velocity_command = WorldVelocityCommand()
+        self.world_command_preprocess_config = WorldCommandPreprocessConfig()
+        self.une_to_control_plane_config = UneToControlPlaneConfig()
+        self.une_to_control_plane_mapper.config = self.une_to_control_plane_config
+        self.world_velocity_feedback_mode = "raw_body"
         self.body_velocity_outer_loop_config = BodyVelocityOuterLoopConfig(
             kp_v_forward=0.0,
             kp_v_right=0.0,
@@ -182,11 +203,16 @@ class RollRateInnerLoopRuntime:
         self.test_running = False
         self.outer_loop_running = False
         self.body_velocity_outer_loop_running = False
+        self.body_velocity_outer_loop_source = "body"
         self.altitude_loop_running = False
         self.last_snapshot = RollRateTestState(
             command=self.command,
             angle_command=self.angle_command,
             body_velocity_command=self.body_velocity_command,
+            world_velocity_command=self.world_velocity_command,
+            world_command_preprocess_config=self.world_command_preprocess_config,
+            une_to_control_plane_config=self.une_to_control_plane_config,
+            world_velocity_feedback_mode=self.world_velocity_feedback_mode,
             outer_loop_config=self.attitude_pipeline.angle_controller.config,
             yaw_outer_loop_config=self.yaw_outer_loop_config,
             body_velocity_outer_loop_config=self.body_velocity_outer_loop_config,
@@ -267,6 +293,27 @@ class RollRateInnerLoopRuntime:
         self.body_velocity_command = command
         self._refresh_live_snapshot(status="Body-velocity targets updated")
 
+    def set_world_velocity_command(self, command: WorldVelocityCommand) -> None:
+        self.world_velocity_command = command
+        self._refresh_live_snapshot(status="World-velocity debug targets updated")
+
+    def set_world_command_preprocess_config(self, config: WorldCommandPreprocessConfig) -> None:
+        self.world_command_preprocess_config = config
+        self._refresh_live_snapshot(status="World-command sign preprocessing updated")
+
+    def set_une_to_control_plane_config(self, config: UneToControlPlaneConfig) -> None:
+        self.une_to_control_plane_config = config
+        self.une_to_control_plane_mapper.config = config
+        self._refresh_live_snapshot(status="UNE-to-control-plane mapping updated")
+
+    def set_world_velocity_feedback_mode(self, mode: str) -> None:
+        normalized_mode = str(mode).strip().lower()
+        allowed_modes = {"projected_une", "raw_body"}
+        if normalized_mode not in allowed_modes:
+            raise ValueError(f"Unsupported world velocity feedback mode: {mode}")
+        self.world_velocity_feedback_mode = normalized_mode
+        self._refresh_live_snapshot(status="World-velocity feedback mode updated")
+
     def set_body_velocity_outer_loop_config(self, config: BodyVelocityOuterLoopConfig) -> None:
         self.body_velocity_outer_loop_config = config
         self.attitude_pipeline.set_body_velocity_outer_loop_config(config)
@@ -291,12 +338,23 @@ class RollRateInnerLoopRuntime:
         self.attitude_pipeline.body_velocity_controller.reset()
         self.outer_loop_running = True
         self.body_velocity_outer_loop_running = True
+        self.body_velocity_outer_loop_source = "body"
         self._refresh_live_snapshot(status="Body-velocity outer loop enabled")
 
     def stop_body_velocity_outer_loop(self) -> None:
         self.body_velocity_outer_loop_running = False
         self.attitude_pipeline.body_velocity_controller.reset()
         self._refresh_live_snapshot(status="Body-velocity outer loop disabled")
+
+    def start_world_velocity_control(self) -> None:
+        self.attitude_pipeline.body_velocity_controller.reset()
+        self.outer_loop_running = True
+        self.body_velocity_outer_loop_running = True
+        self.body_velocity_outer_loop_source = "world"
+        self._refresh_live_snapshot(status="World-velocity control enabled")
+
+    def stop_world_velocity_control(self) -> None:
+        self.stop_body_velocity_outer_loop()
 
     def set_altitude_command(self, altitude_command: AltitudeCommand) -> None:
         self.altitude_command = altitude_command
@@ -346,8 +404,18 @@ class RollRateInnerLoopRuntime:
 
     def _run_cycle(self, *, write_outputs: bool, status: str) -> RollRateTestState:
         telemetry = self.telemetry.read()
+        world_velocity_projection = self._compute_world_velocity_projection(telemetry)
+        translated_velocity_command, translated_velocity_feedback, control_plane_velocity_debug = self._translate_world_velocity_for_control_plane(telemetry)
+        active_velocity_command, active_velocity_feedback = self._select_active_velocity_outer_loop_inputs(
+            telemetry=telemetry,
+            translated_velocity_command=translated_velocity_command,
+            translated_velocity_feedback=translated_velocity_feedback,
+        )
         altitude_loop, collective_cmd = self._compute_altitude_channel(telemetry)
-        body_velocity_outer_loop, outer_loop, yaw_outer_loop, controller_result = self._compute_attitude_channel(telemetry)
+        body_velocity_outer_loop, outer_loop, yaw_outer_loop, controller_result = self._compute_attitude_channel(
+            telemetry=active_velocity_feedback,
+            active_body_velocity_command=active_velocity_command,
+        )
         actuator_demand = ActuatorDemand(
             base_rpm=collective_cmd,
             u_roll=controller_result.u_roll,
@@ -365,6 +433,8 @@ class RollRateInnerLoopRuntime:
             self.hardware.write_motor_command(motor_command)
         return self._refresh_snapshot(
             telemetry=telemetry,
+            world_velocity_projection=world_velocity_projection,
+            control_plane_velocity_debug=control_plane_velocity_debug,
             body_velocity_outer_loop=body_velocity_outer_loop,
             outer_loop=outer_loop,
             yaw_outer_loop=yaw_outer_loop,
@@ -374,11 +444,16 @@ class RollRateInnerLoopRuntime:
             status=status,
         )
 
-    def _compute_attitude_channel(self, telemetry: RollRateTelemetry) -> tuple[BodyVelocityOuterLoopOutput, AngleOuterLoopOutput, YawOuterLoopOutput, ControllerResult]:
+    def _compute_attitude_channel(
+        self,
+        *,
+        telemetry: RollRateTelemetry,
+        active_body_velocity_command: BodyVelocityCommand,
+    ) -> tuple[BodyVelocityOuterLoopOutput, AngleOuterLoopOutput, YawOuterLoopOutput, ControllerResult]:
         return self.attitude_pipeline.compute(
             telemetry=telemetry,
             angle_command=self.angle_command,
-            body_velocity_command=self.body_velocity_command,
+            body_velocity_command=active_body_velocity_command,
             rate_command=self.body_rate_command,
             rate_config=self.body_rate_config,
             body_velocity_outer_config=self.body_velocity_outer_loop_config,
@@ -394,6 +469,118 @@ class RollRateInnerLoopRuntime:
         )
         collective_cmd = altitude_loop.throttle_cmd if self.altitude_loop_running else self.command.base_rpm
         return (altitude_loop, collective_cmd)
+
+    def _compute_world_velocity_projection(self, telemetry: RollRateTelemetry) -> WorldToBodyVelocityProjectionOutput:
+        preprocessed_north_m_s, preprocessed_east_m_s = self._preprocess_world_velocity_command()
+        return self.world_velocity_projection.compute(
+            v_north_cmd_m_s=preprocessed_north_m_s,
+            v_east_cmd_m_s=preprocessed_east_m_s,
+            heading_deg=telemetry.heading_deg,
+        )
+
+    def _preprocess_world_velocity_command(self) -> tuple[float, float]:
+        north_cmd_m_s = self.world_velocity_command.v_north_cmd_m_s
+        east_cmd_m_s = self.world_velocity_command.v_east_cmd_m_s
+        if self.world_command_preprocess_config.invert_world_north:
+            north_cmd_m_s = -north_cmd_m_s
+        if self.world_command_preprocess_config.invert_world_east:
+            east_cmd_m_s = -east_cmd_m_s
+        return (north_cmd_m_s, east_cmd_m_s)
+
+    def _translate_world_velocity_command_for_control_plane(
+        self,
+        telemetry: RollRateTelemetry,
+    ) -> tuple[BodyVelocityCommand, float, float, WorldToBodyVelocityProjectionOutput]:
+        preprocessed_north_m_s, preprocessed_east_m_s = self._preprocess_world_velocity_command()
+        projected_command = self.world_velocity_projection.compute(
+            v_north_cmd_m_s=preprocessed_north_m_s,
+            v_east_cmd_m_s=preprocessed_east_m_s,
+            heading_deg=telemetry.heading_deg,
+        )
+        ctrl_x_cmd_m_s, ctrl_y_cmd_m_s = self.une_to_control_plane_mapper.map_horizontal(
+            projected_command.v_forward_cmd_from_world_m_s,
+            projected_command.v_right_cmd_from_world_m_s,
+        )
+        return (
+            BodyVelocityCommand(
+                v_forward_cmd_m_s=ctrl_x_cmd_m_s,
+                v_right_cmd_m_s=ctrl_y_cmd_m_s,
+            ),
+            preprocessed_north_m_s,
+            preprocessed_east_m_s,
+            projected_command,
+        )
+
+    def _translate_projected_une_world_feedback(
+        self,
+        telemetry: RollRateTelemetry,
+    ) -> tuple[float, float]:
+        projected_feedback = self.world_velocity_projection.compute(
+            v_north_cmd_m_s=telemetry.v_north_une_m_s,
+            v_east_cmd_m_s=telemetry.v_east_une_m_s,
+            heading_deg=telemetry.heading_deg,
+        )
+        return self.une_to_control_plane_mapper.map_horizontal(
+            projected_feedback.v_forward_cmd_from_world_m_s,
+            projected_feedback.v_right_cmd_from_world_m_s,
+        )
+
+    def _translate_world_velocity_for_control_plane(
+        self,
+        telemetry: RollRateTelemetry,
+    ) -> tuple[BodyVelocityCommand, RollRateTelemetry, ControlPlaneVelocityDebug]:
+        (
+            translated_command,
+            preprocessed_north_m_s,
+            preprocessed_east_m_s,
+            projected_command,
+        ) = self._translate_world_velocity_command_for_control_plane(telemetry)
+        projected_une_meas_x_m_s, projected_une_meas_y_m_s = self._translate_projected_une_world_feedback(telemetry)
+        raw_body_meas_x_m_s = telemetry.vx_body_m_s
+        raw_body_meas_y_m_s = telemetry.vy_body_m_s
+        if self.world_velocity_feedback_mode == "raw_body":
+            active_meas_x_m_s = raw_body_meas_x_m_s
+            active_meas_y_m_s = raw_body_meas_y_m_s
+        else:
+            active_meas_x_m_s = projected_une_meas_x_m_s
+            active_meas_y_m_s = projected_une_meas_y_m_s
+        translated_feedback = replace(
+            telemetry,
+            # Compatibility shim: the legacy body-velocity outer loop still reads
+            # vx_body/vy_body fields, but runtime now loads them with translated
+            # control-plane measurements instead of raw body-frame velocity.
+            vx_body_m_s=active_meas_x_m_s,
+            vy_body_m_s=active_meas_y_m_s,
+        )
+        debug = ControlPlaneVelocityDebug(
+            v_north_cmd_raw_m_s=self.world_velocity_command.v_north_cmd_m_s,
+            v_east_cmd_raw_m_s=self.world_velocity_command.v_east_cmd_m_s,
+            v_north_cmd_preprocessed_m_s=preprocessed_north_m_s,
+            v_east_cmd_preprocessed_m_s=preprocessed_east_m_s,
+            v_forward_cmd_projected_m_s=projected_command.v_forward_cmd_from_world_m_s,
+            v_right_cmd_projected_m_s=projected_command.v_right_cmd_from_world_m_s,
+            vx_control_plane_cmd_m_s=translated_command.v_forward_cmd_m_s,
+            vy_control_plane_cmd_m_s=translated_command.v_right_cmd_m_s,
+            vx_control_plane_meas_m_s=active_meas_x_m_s,
+            vy_control_plane_meas_m_s=active_meas_y_m_s,
+            vx_projected_une_meas_m_s=projected_une_meas_x_m_s,
+            vy_projected_une_meas_m_s=projected_une_meas_y_m_s,
+            vx_raw_body_meas_m_s=raw_body_meas_x_m_s,
+            vy_raw_body_meas_m_s=raw_body_meas_y_m_s,
+            world_feedback_mode=self.world_velocity_feedback_mode,
+        )
+        return (translated_command, translated_feedback, debug)
+
+    def _select_active_velocity_outer_loop_inputs(
+        self,
+        *,
+        telemetry: RollRateTelemetry,
+        translated_velocity_command: BodyVelocityCommand,
+        translated_velocity_feedback: RollRateTelemetry,
+    ) -> tuple[BodyVelocityCommand, RollRateTelemetry]:
+        if self.body_velocity_outer_loop_source == "world":
+            return (translated_velocity_command, translated_velocity_feedback)
+        return (self.body_velocity_command, telemetry)
 
     def _split_legacy_rate_command(self, command: RollRateTestCommand) -> tuple[BodyRateCommand, BodyRatePIDConfig]:
         return (
@@ -601,6 +788,12 @@ class RollRateInnerLoopRuntime:
             vx_body_m_s=0.0,
             vy_body_m_s=0.0,
         )
+        case_zero_error = controller.compute(
+            v_forward_cmd_m_s=1.0,
+            v_right_cmd_m_s=-2.0,
+            vx_body_m_s=1.0,
+            vy_body_m_s=-2.0,
+        )
         runtime_case = self.attitude_pipeline.compute(
             telemetry=RollRateTelemetry(vx_body_m_s=0.0, vy_body_m_s=0.0, p_meas_rad_s=0.0, q_meas_rad_s=0.0),
             angle_command=AngleCommand(roll_cmd_deg=0.0, pitch_cmd_deg=0.0, yaw_cmd_deg=0.0),
@@ -630,12 +823,401 @@ class RollRateInnerLoopRuntime:
                 "roll_cmd_from_velocity_deg": case_limited.roll_cmd_from_velocity_deg,
                 "pass": abs(case_limited.pitch_cmd_from_velocity_deg) <= test_config.velocity_angle_limit_deg + 1e-9 and abs(case_limited.roll_cmd_from_velocity_deg) <= test_config.velocity_angle_limit_deg + 1e-9,
             },
+            "case_zero_error": {
+                "pitch_cmd_from_velocity_deg": case_zero_error.pitch_cmd_from_velocity_deg,
+                "roll_cmd_from_velocity_deg": case_zero_error.roll_cmd_from_velocity_deg,
+                "pass": abs(case_zero_error.pitch_cmd_from_velocity_deg) < 1e-9 and abs(case_zero_error.roll_cmd_from_velocity_deg) < 1e-9,
+            },
             "runtime_wiring": {
                 "velocity_pitch_cmd_deg": velocity_output.pitch_cmd_from_velocity_deg,
                 "velocity_roll_cmd_deg": velocity_output.roll_cmd_from_velocity_deg,
                 "p_cmd_rad_s": attitude_output.p_cmd_rad_s,
                 "q_cmd_rad_s": attitude_output.q_cmd_rad_s,
                 "pass": abs(velocity_output.pitch_cmd_from_velocity_deg) > 0.0 and abs(velocity_output.roll_cmd_from_velocity_deg) > 0.0 and abs(attitude_output.p_cmd_rad_s) > 0.0 and abs(attitude_output.q_cmd_rad_s) > 0.0,
+            },
+        }
+
+    def run_une_to_control_plane_mapper_self_check(self) -> dict[str, object]:
+        default_mapper = UneToControlPlaneMapper(config=UneToControlPlaneConfig())
+        flipped_x_mapper = UneToControlPlaneMapper(config=UneToControlPlaneConfig(sign_x=-1.0))
+        flipped_y_mapper = UneToControlPlaneMapper(config=UneToControlPlaneConfig(sign_y=-1.0))
+        swapped_mapper = UneToControlPlaneMapper(config=UneToControlPlaneConfig(swap_ne=True))
+        combined_mapper = UneToControlPlaneMapper(
+            config=UneToControlPlaneConfig(swap_ne=True, sign_x=-1.0, sign_y=1.0)
+        )
+        default_case = default_mapper.map_horizontal(2.0, 3.0)
+        flipped_x_case = flipped_x_mapper.map_horizontal(2.0, 3.0)
+        flipped_y_case = flipped_y_mapper.map_horizontal(2.0, 3.0)
+        swapped_case = swapped_mapper.map_horizontal(2.0, 3.0)
+        combined_case = combined_mapper.map_horizontal(2.0, 3.0)
+        return {
+            "default": {"x": default_case[0], "y": default_case[1], "pass": default_case == (2.0, 3.0)},
+            "sign_x": {"x": flipped_x_case[0], "y": flipped_x_case[1], "pass": flipped_x_case == (-2.0, 3.0)},
+            "sign_y": {"x": flipped_y_case[0], "y": flipped_y_case[1], "pass": flipped_y_case == (2.0, -3.0)},
+            "swap_ne": {"x": swapped_case[0], "y": swapped_case[1], "pass": swapped_case == (3.0, 2.0)},
+            "combined": {"x": combined_case[0], "y": combined_case[1], "pass": combined_case == (-3.0, 2.0)},
+        }
+
+    def run_world_velocity_translation_chain_self_check(self) -> dict[str, object]:
+        original_config = self.une_to_control_plane_config
+        original_preprocess_config = self.world_command_preprocess_config
+        original_mode = self.world_velocity_feedback_mode
+        try:
+            self.set_une_to_control_plane_config(
+                UneToControlPlaneConfig(swap_ne=True, sign_x=-1.0, sign_y=1.0)
+            )
+            self.set_world_command_preprocess_config(WorldCommandPreprocessConfig())
+            self.set_world_velocity_feedback_mode("projected_une")
+            self.set_world_velocity_command(WorldVelocityCommand(v_north_cmd_m_s=2.0, v_east_cmd_m_s=3.0))
+            telemetry_heading_0 = RollRateTelemetry(
+                v_north_une_m_s=4.0,
+                v_east_une_m_s=5.0,
+                heading_deg=0.0,
+                p_meas_rad_s=0.0,
+                q_meas_rad_s=0.0,
+            )
+            command_heading_0, feedback_heading_0, debug_heading_0 = self._translate_world_velocity_for_control_plane(
+                telemetry_heading_0
+            )
+            telemetry_heading_90 = RollRateTelemetry(
+                v_north_une_m_s=4.0,
+                v_east_une_m_s=5.0,
+                heading_deg=90.0,
+                p_meas_rad_s=0.0,
+                q_meas_rad_s=0.0,
+            )
+            translated_command, translated_feedback, debug = self._translate_world_velocity_for_control_plane(telemetry_heading_90)
+            runtime_case = self.attitude_pipeline.compute(
+                telemetry=translated_feedback,
+                angle_command=AngleCommand(),
+                body_velocity_command=translated_command,
+                rate_command=BodyRateCommand(),
+                rate_config=BodyRatePIDConfig(output_limit=10.0),
+                body_velocity_outer_config=BodyVelocityOuterLoopConfig(
+                    kp_v_forward=1.0,
+                    kp_v_right=1.0,
+                    velocity_angle_limit_deg=20.0,
+                ),
+                outer_config=AngleOuterLoopConfig(
+                    kp_roll_angle=0.10,
+                    kp_pitch_angle=0.10,
+                    rate_limit_rad_s=2.0,
+                ),
+                yaw_outer_config=YawOuterLoopConfig(),
+                body_velocity_outer_loop_enabled=True,
+                outer_loop_enabled=True,
+            )
+            snapshot = self._refresh_snapshot(
+                telemetry=telemetry_heading_90,
+                control_plane_velocity_debug=debug,
+                body_velocity_outer_loop=runtime_case[0],
+                outer_loop=runtime_case[1],
+                yaw_outer_loop=runtime_case[2],
+                controller=runtime_case[3],
+                status="Translation chain self-check",
+            )
+            return {
+                "heading_0": {
+                    "cmd_x": command_heading_0.v_forward_cmd_m_s,
+                    "cmd_y": command_heading_0.v_right_cmd_m_s,
+                    "meas_x": feedback_heading_0.vx_body_m_s,
+                    "meas_y": feedback_heading_0.vy_body_m_s,
+                    "pass": (
+                        abs(command_heading_0.v_forward_cmd_m_s - (-3.0)) < 1e-9
+                        and abs(command_heading_0.v_right_cmd_m_s - 2.0) < 1e-9
+                        and abs(feedback_heading_0.vx_body_m_s - (-5.0)) < 1e-9
+                        and abs(feedback_heading_0.vy_body_m_s - 4.0) < 1e-9
+                        and abs(debug_heading_0.vx_control_plane_cmd_m_s - (-3.0)) < 1e-9
+                        and abs(debug_heading_0.vy_control_plane_cmd_m_s - 2.0) < 1e-9
+                    ),
+                },
+                "heading_90": {
+                    "cmd_x": translated_command.v_forward_cmd_m_s,
+                    "cmd_y": translated_command.v_right_cmd_m_s,
+                    "meas_x": translated_feedback.vx_body_m_s,
+                    "meas_y": translated_feedback.vy_body_m_s,
+                    "pass": (
+                        abs(translated_command.v_forward_cmd_m_s - 2.0) < 1e-9
+                        and abs(translated_command.v_right_cmd_m_s - 3.0) < 1e-9
+                        and abs(translated_feedback.vx_body_m_s - 4.0) < 1e-9
+                        and abs(translated_feedback.vy_body_m_s - 5.0) < 1e-9
+                    ),
+                },
+                "translated_command": {
+                    "x": translated_command.v_forward_cmd_m_s,
+                    "y": translated_command.v_right_cmd_m_s,
+                    "pass": abs(translated_command.v_forward_cmd_m_s - 2.0) < 1e-9 and abs(translated_command.v_right_cmd_m_s - 3.0) < 1e-9,
+                },
+                "translated_feedback": {
+                    "x": translated_feedback.vx_body_m_s,
+                    "y": translated_feedback.vy_body_m_s,
+                    "pass": abs(translated_feedback.vx_body_m_s - 4.0) < 1e-9 and abs(translated_feedback.vy_body_m_s - 5.0) < 1e-9,
+                },
+                "snapshot_debug": {
+                    "x_cmd": snapshot.control_plane_velocity_debug.vx_control_plane_cmd_m_s,
+                    "y_cmd": snapshot.control_plane_velocity_debug.vy_control_plane_cmd_m_s,
+                    "x_meas": snapshot.control_plane_velocity_debug.vx_control_plane_meas_m_s,
+                    "y_meas": snapshot.control_plane_velocity_debug.vy_control_plane_meas_m_s,
+                    "pass": (
+                        abs(snapshot.control_plane_velocity_debug.vx_control_plane_cmd_m_s - 2.0) < 1e-9
+                        and abs(snapshot.control_plane_velocity_debug.vy_control_plane_cmd_m_s - 3.0) < 1e-9
+                        and abs(snapshot.control_plane_velocity_debug.vx_control_plane_meas_m_s - 4.0) < 1e-9
+                        and abs(snapshot.control_plane_velocity_debug.vy_control_plane_meas_m_s - 5.0) < 1e-9
+                        and snapshot.control_plane_velocity_debug.world_feedback_mode == "projected_une"
+                    ),
+                },
+                "outer_loop_output": {
+                    "pitch_cmd_from_velocity_deg": runtime_case[0].pitch_cmd_from_velocity_deg,
+                    "roll_cmd_from_velocity_deg": runtime_case[0].roll_cmd_from_velocity_deg,
+                    "pass": runtime_case[0].pitch_cmd_from_velocity_deg < 0.0 and runtime_case[0].roll_cmd_from_velocity_deg < 0.0,
+                },
+            }
+        finally:
+            self.set_une_to_control_plane_config(original_config)
+            self.set_world_command_preprocess_config(original_preprocess_config)
+            self.set_world_velocity_feedback_mode(original_mode)
+
+    def run_world_velocity_feedback_mode_self_check(self) -> dict[str, object]:
+        original_config = self.une_to_control_plane_config
+        original_preprocess_config = self.world_command_preprocess_config
+        original_mode = self.world_velocity_feedback_mode
+        try:
+            self.set_une_to_control_plane_config(UneToControlPlaneConfig(swap_ne=False, sign_x=1.0, sign_y=1.0))
+            self.set_world_command_preprocess_config(WorldCommandPreprocessConfig())
+            self.set_world_velocity_command(WorldVelocityCommand(v_north_cmd_m_s=1.0, v_east_cmd_m_s=2.0))
+            telemetry = RollRateTelemetry(
+                v_north_une_m_s=3.0,
+                v_east_une_m_s=4.0,
+                vx_body_m_s=7.0,
+                vy_body_m_s=8.0,
+                heading_deg=0.0,
+            )
+
+            self.set_world_velocity_feedback_mode("projected_une")
+            projected_command, projected_feedback, projected_debug = self._translate_world_velocity_for_control_plane(telemetry)
+
+            self.set_world_velocity_feedback_mode("raw_body")
+            raw_command, raw_feedback, raw_debug = self._translate_world_velocity_for_control_plane(telemetry)
+
+            return {
+                "projected_une": {
+                    "cmd_x": projected_command.v_forward_cmd_m_s,
+                    "cmd_y": projected_command.v_right_cmd_m_s,
+                    "meas_x": projected_feedback.vx_body_m_s,
+                    "meas_y": projected_feedback.vy_body_m_s,
+                    "debug_active_mode": projected_debug.world_feedback_mode,
+                    "pass": (
+                        abs(projected_command.v_forward_cmd_m_s - 1.0) < 1e-9
+                        and abs(projected_command.v_right_cmd_m_s - 2.0) < 1e-9
+                        and abs(projected_feedback.vx_body_m_s - 3.0) < 1e-9
+                        and abs(projected_feedback.vy_body_m_s - 4.0) < 1e-9
+                        and abs(projected_debug.vx_projected_une_meas_m_s - 3.0) < 1e-9
+                        and abs(projected_debug.vy_projected_une_meas_m_s - 4.0) < 1e-9
+                        and abs(projected_debug.vx_raw_body_meas_m_s - 7.0) < 1e-9
+                        and abs(projected_debug.vy_raw_body_meas_m_s - 8.0) < 1e-9
+                        and projected_debug.world_feedback_mode == "projected_une"
+                    ),
+                },
+                "raw_body": {
+                    "cmd_x": raw_command.v_forward_cmd_m_s,
+                    "cmd_y": raw_command.v_right_cmd_m_s,
+                    "meas_x": raw_feedback.vx_body_m_s,
+                    "meas_y": raw_feedback.vy_body_m_s,
+                    "debug_active_mode": raw_debug.world_feedback_mode,
+                    "pass": (
+                        abs(raw_command.v_forward_cmd_m_s - 1.0) < 1e-9
+                        and abs(raw_command.v_right_cmd_m_s - 2.0) < 1e-9
+                        and abs(raw_feedback.vx_body_m_s - 7.0) < 1e-9
+                        and abs(raw_feedback.vy_body_m_s - 8.0) < 1e-9
+                        and abs(raw_debug.vx_projected_une_meas_m_s - 3.0) < 1e-9
+                        and abs(raw_debug.vy_projected_une_meas_m_s - 4.0) < 1e-9
+                        and abs(raw_debug.vx_raw_body_meas_m_s - 7.0) < 1e-9
+                        and abs(raw_debug.vy_raw_body_meas_m_s - 8.0) < 1e-9
+                        and raw_debug.world_feedback_mode == "raw_body"
+                    ),
+                },
+            }
+        finally:
+            self.set_une_to_control_plane_config(original_config)
+            self.set_world_command_preprocess_config(original_preprocess_config)
+            self.set_world_velocity_feedback_mode(original_mode)
+
+    def run_world_command_preprojection_sign_self_check(self) -> dict[str, object]:
+        original_config = self.une_to_control_plane_config
+        original_preprocess_config = self.world_command_preprocess_config
+        try:
+            self.set_une_to_control_plane_config(UneToControlPlaneConfig(swap_ne=False, sign_x=1.0, sign_y=-1.0))
+            self.set_world_velocity_command(WorldVelocityCommand(v_north_cmd_m_s=1.0, v_east_cmd_m_s=1.0))
+
+            self.set_world_command_preprocess_config(
+                WorldCommandPreprocessConfig(invert_world_north=False, invert_world_east=True)
+            )
+            pre_heading_0_command, _, pre_heading_0_debug = self._translate_world_velocity_for_control_plane(
+                RollRateTelemetry(heading_deg=0.0)
+            )
+            pre_heading_45_command, _, pre_heading_45_debug = self._translate_world_velocity_for_control_plane(
+                RollRateTelemetry(heading_deg=45.0)
+            )
+
+            self.set_world_command_preprocess_config(WorldCommandPreprocessConfig())
+            projected_heading_0 = self.world_velocity_projection.compute(
+                v_north_cmd_m_s=1.0,
+                v_east_cmd_m_s=1.0,
+                heading_deg=0.0,
+            )
+            projected_heading_45 = self.world_velocity_projection.compute(
+                v_north_cmd_m_s=1.0,
+                v_east_cmd_m_s=1.0,
+                heading_deg=45.0,
+            )
+            post_heading_0 = self.une_to_control_plane_mapper.map_horizontal(
+                projected_heading_0.v_forward_cmd_from_world_m_s,
+                projected_heading_0.v_right_cmd_from_world_m_s,
+            )
+            post_heading_45 = self.une_to_control_plane_mapper.map_horizontal(
+                projected_heading_45.v_forward_cmd_from_world_m_s,
+                projected_heading_45.v_right_cmd_from_world_m_s,
+            )
+
+            return {
+                "heading_0": {
+                    "pre_projection_fix": {
+                        "cmd_x": pre_heading_0_command.v_forward_cmd_m_s,
+                        "cmd_y": pre_heading_0_command.v_right_cmd_m_s,
+                    },
+                    "post_projection_invert_y": {
+                        "cmd_x": post_heading_0[0],
+                        "cmd_y": post_heading_0[1],
+                    },
+                    "pass": (
+                        abs(pre_heading_0_command.v_forward_cmd_m_s - 1.0) < 1e-9
+                        and abs(pre_heading_0_command.v_right_cmd_m_s - 1.0) < 1e-9
+                        and abs(post_heading_0[0] - 1.0) < 1e-9
+                        and abs(post_heading_0[1] + 1.0) < 1e-9
+                    ),
+                },
+                "heading_45": {
+                    "pre_projection_fix": {
+                        "north_pre": pre_heading_45_debug.v_north_cmd_preprocessed_m_s,
+                        "east_pre": pre_heading_45_debug.v_east_cmd_preprocessed_m_s,
+                        "proj_forward": pre_heading_45_debug.v_forward_cmd_projected_m_s,
+                        "proj_right": pre_heading_45_debug.v_right_cmd_projected_m_s,
+                        "cmd_x": pre_heading_45_command.v_forward_cmd_m_s,
+                        "cmd_y": pre_heading_45_command.v_right_cmd_m_s,
+                    },
+                    "post_projection_invert_y": {
+                        "proj_forward": projected_heading_45.v_forward_cmd_from_world_m_s,
+                        "proj_right": projected_heading_45.v_right_cmd_from_world_m_s,
+                        "cmd_x": post_heading_45[0],
+                        "cmd_y": post_heading_45[1],
+                    },
+                    "pass": (
+                        abs(pre_heading_45_command.v_forward_cmd_m_s) < 1e-9
+                        and abs(pre_heading_45_command.v_right_cmd_m_s - 1.414213562373095) < 1e-9
+                        and abs(post_heading_45[0] - 1.414213562373095) < 1e-9
+                        and abs(post_heading_45[1]) < 1e-9
+                    ),
+                },
+            }
+        finally:
+            self.set_une_to_control_plane_config(original_config)
+            self.set_world_command_preprocess_config(original_preprocess_config)
+
+    def run_velocity_outer_loop_source_selection_self_check(self) -> dict[str, object]:
+        original_config = self.une_to_control_plane_config
+        original_preprocess_config = self.world_command_preprocess_config
+        original_mode = self.world_velocity_feedback_mode
+        telemetry = RollRateTelemetry(
+            v_north_une_m_s=10.0,
+            v_east_une_m_s=20.0,
+            vx_body_m_s=1.0,
+            vy_body_m_s=2.0,
+            p_meas_rad_s=0.0,
+            q_meas_rad_s=0.0,
+        )
+        try:
+            self.body_velocity_command = BodyVelocityCommand(v_forward_cmd_m_s=3.0, v_right_cmd_m_s=4.0)
+            self.world_velocity_command = WorldVelocityCommand(v_north_cmd_m_s=5.0, v_east_cmd_m_s=6.0)
+            self.set_world_command_preprocess_config(WorldCommandPreprocessConfig())
+            self.set_une_to_control_plane_config(UneToControlPlaneConfig(swap_ne=False, sign_x=1.0, sign_y=1.0))
+            self.set_world_velocity_feedback_mode("projected_une")
+            translated_command, translated_feedback, _ = self._translate_world_velocity_for_control_plane(telemetry)
+
+            self.body_velocity_outer_loop_source = "body"
+            body_command, body_feedback = self._select_active_velocity_outer_loop_inputs(
+                telemetry=telemetry,
+                translated_velocity_command=translated_command,
+                translated_velocity_feedback=translated_feedback,
+            )
+            self.body_velocity_outer_loop_source = "world"
+            world_command, world_feedback = self._select_active_velocity_outer_loop_inputs(
+                telemetry=telemetry,
+                translated_velocity_command=translated_command,
+                translated_velocity_feedback=translated_feedback,
+            )
+
+            return {
+                "body_source": {
+                    "cmd_x": body_command.v_forward_cmd_m_s,
+                    "cmd_y": body_command.v_right_cmd_m_s,
+                    "meas_x": body_feedback.vx_body_m_s,
+                    "meas_y": body_feedback.vy_body_m_s,
+                    "pass": (
+                        body_command.v_forward_cmd_m_s == 3.0
+                        and body_command.v_right_cmd_m_s == 4.0
+                        and body_feedback.vx_body_m_s == 1.0
+                        and body_feedback.vy_body_m_s == 2.0
+                    ),
+                },
+                "world_source": {
+                    "cmd_x": world_command.v_forward_cmd_m_s,
+                    "cmd_y": world_command.v_right_cmd_m_s,
+                    "meas_x": world_feedback.vx_body_m_s,
+                    "meas_y": world_feedback.vy_body_m_s,
+                    "pass": (
+                        world_command.v_forward_cmd_m_s == 5.0
+                        and world_command.v_right_cmd_m_s == 6.0
+                        and world_feedback.vx_body_m_s == 10.0
+                        and world_feedback.vy_body_m_s == 20.0
+                    ),
+                },
+            }
+        finally:
+            self.set_une_to_control_plane_config(original_config)
+            self.set_world_command_preprocess_config(original_preprocess_config)
+            self.set_world_velocity_feedback_mode(original_mode)
+
+    def run_world_velocity_projection_self_check(self) -> dict[str, object]:
+        case_north_aligned = self.world_velocity_projection.compute(
+            v_north_cmd_m_s=1.0,
+            v_east_cmd_m_s=0.0,
+            heading_deg=0.0,
+        )
+        case_east_heading = self.world_velocity_projection.compute(
+            v_north_cmd_m_s=1.0,
+            v_east_cmd_m_s=0.0,
+            heading_deg=90.0,
+        )
+        case_east_command = self.world_velocity_projection.compute(
+            v_north_cmd_m_s=0.0,
+            v_east_cmd_m_s=1.0,
+            heading_deg=0.0,
+        )
+        return {
+            "case_north_aligned": {
+                "v_forward_cmd_from_world_m_s": case_north_aligned.v_forward_cmd_from_world_m_s,
+                "v_right_cmd_from_world_m_s": case_north_aligned.v_right_cmd_from_world_m_s,
+                "pass": case_north_aligned.v_forward_cmd_from_world_m_s > 0.0 and abs(case_north_aligned.v_right_cmd_from_world_m_s) < 1e-9,
+            },
+            "case_east_heading": {
+                "v_forward_cmd_from_world_m_s": case_east_heading.v_forward_cmd_from_world_m_s,
+                "v_right_cmd_from_world_m_s": case_east_heading.v_right_cmd_from_world_m_s,
+                "pass": abs(case_east_heading.v_forward_cmd_from_world_m_s) < 1e-9 and case_east_heading.v_right_cmd_from_world_m_s < 0.0,
+            },
+            "case_east_command": {
+                "v_forward_cmd_from_world_m_s": case_east_command.v_forward_cmd_from_world_m_s,
+                "v_right_cmd_from_world_m_s": case_east_command.v_right_cmd_from_world_m_s,
+                "pass": abs(case_east_command.v_forward_cmd_from_world_m_s) < 1e-9 and case_east_command.v_right_cmd_from_world_m_s > 0.0,
             },
         }
 
@@ -869,6 +1451,8 @@ class RollRateInnerLoopRuntime:
         *,
         telemetry=None,
         controller=None,
+        world_velocity_projection: WorldToBodyVelocityProjectionOutput | None = None,
+        control_plane_velocity_debug: ControlPlaneVelocityDebug | None = None,
         body_velocity_outer_loop: BodyVelocityOuterLoopOutput | None = None,
         outer_loop: AngleOuterLoopOutput | None = None,
         yaw_outer_loop: YawOuterLoopOutput | None = None,
@@ -879,6 +1463,15 @@ class RollRateInnerLoopRuntime:
     ) -> RollRateTestState:
         telemetry_value = telemetry if telemetry is not None else self.last_snapshot.telemetry
         controller_value = controller if controller is not None else self.last_snapshot.controller
+        if world_velocity_projection is not None:
+            world_velocity_projection_value = world_velocity_projection
+        else:
+            world_velocity_projection_value = self._compute_world_velocity_projection(telemetry_value)
+        control_plane_velocity_debug_value = (
+            control_plane_velocity_debug
+            if control_plane_velocity_debug is not None
+            else self._translate_world_velocity_for_control_plane(telemetry_value)[2]
+        )
         body_velocity_outer_loop_value = body_velocity_outer_loop if body_velocity_outer_loop is not None else self.last_snapshot.body_velocity_outer_loop
         outer_loop_value = outer_loop if outer_loop is not None else self.last_snapshot.outer_loop
         yaw_outer_loop_value = yaw_outer_loop if yaw_outer_loop is not None else self.last_snapshot.yaw_outer_loop
@@ -892,12 +1485,18 @@ class RollRateInnerLoopRuntime:
             controller=controller_value,
             angle_command=self.angle_command,
             body_velocity_command=self.body_velocity_command,
+            world_velocity_command=self.world_velocity_command,
+            world_command_preprocess_config=self.world_command_preprocess_config,
+            une_to_control_plane_config=self.une_to_control_plane_config,
+            world_velocity_feedback_mode=self.world_velocity_feedback_mode,
             outer_loop_config=self.attitude_pipeline.angle_controller.config,
             outer_loop=outer_loop_value,
             yaw_outer_loop_config=self.yaw_outer_loop_config,
             yaw_outer_loop=yaw_outer_loop_value,
             body_velocity_outer_loop_config=self.body_velocity_outer_loop_config,
             body_velocity_outer_loop=body_velocity_outer_loop_value,
+            control_plane_velocity_debug=control_plane_velocity_debug_value,
+            world_velocity_projection=world_velocity_projection_value,
             body_velocity_outer_loop_enabled=self.body_velocity_outer_loop_running,
             outer_loop_running=self.outer_loop_running,
             altitude_command=self.altitude_command,

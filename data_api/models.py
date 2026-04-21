@@ -53,6 +53,9 @@ class RollRateTelemetry:
 
     alt_m: float = 0.0
     vz_m_s: float = 0.0
+    v_up_une_m_s: float = 0.0
+    v_north_une_m_s: float = 0.0
+    v_east_une_m_s: float = 0.0
     vx_body_m_s: float = 0.0
     vy_body_m_s: float = 0.0
     vz_body_m_s: float = 0.0
@@ -159,6 +162,37 @@ class BodyVelocityCommand:
 
 
 @dataclass(frozen=True)
+class WorldVelocityCommand:
+    """UNE-style north/east horizontal velocity targets."""
+
+    v_north_cmd_m_s: float = 0.0
+    v_east_cmd_m_s: float = 0.0
+
+
+@dataclass(frozen=True)
+class WorldCommandPreprocessConfig:
+    """World-command sign fixes applied before heading-based projection."""
+
+    invert_world_north: bool = False
+    invert_world_east: bool = False
+
+
+@dataclass(frozen=True)
+class UneToControlPlaneConfig:
+    """
+    Static UNE-to-control-plane horizontal axis mapping.
+
+    The control plane is the current controller-facing horizontal plane used by
+    the legacy body-velocity outer loop. It is not the raw UNE frame and it is
+    not the craft body frame.
+    """
+
+    swap_ne: bool = False
+    sign_x: float = 1.0
+    sign_y: float = 1.0
+
+
+@dataclass(frozen=True)
 class AngleOuterLoopConfig:
     """
     PID-capable roll/pitch angle outer-loop configuration.
@@ -235,6 +269,35 @@ class BodyVelocityOuterLoopOutput:
     v_right_error_m_s: float = 0.0
     pitch_cmd_from_velocity_deg: float = 0.0
     roll_cmd_from_velocity_deg: float = 0.0
+
+
+@dataclass(frozen=True)
+class ControlPlaneVelocityDebug:
+    """Translated controller-plane command/feedback used by the velocity outer loop."""
+
+    v_north_cmd_raw_m_s: float = 0.0
+    v_east_cmd_raw_m_s: float = 0.0
+    v_north_cmd_preprocessed_m_s: float = 0.0
+    v_east_cmd_preprocessed_m_s: float = 0.0
+    v_forward_cmd_projected_m_s: float = 0.0
+    v_right_cmd_projected_m_s: float = 0.0
+    vx_control_plane_cmd_m_s: float = 0.0
+    vy_control_plane_cmd_m_s: float = 0.0
+    vx_control_plane_meas_m_s: float = 0.0
+    vy_control_plane_meas_m_s: float = 0.0
+    vx_projected_une_meas_m_s: float = 0.0
+    vy_projected_une_meas_m_s: float = 0.0
+    vx_raw_body_meas_m_s: float = 0.0
+    vy_raw_body_meas_m_s: float = 0.0
+    world_feedback_mode: str = "raw_body"
+
+
+@dataclass(frozen=True)
+class WorldToBodyVelocityProjectionOutput:
+    """Debug-only projection of world horizontal command into body forward/right."""
+
+    v_forward_cmd_from_world_m_s: float = 0.0
+    v_right_cmd_from_world_m_s: float = 0.0
 
 
 # ============================================================================
@@ -377,12 +440,18 @@ class RollRateTestState:
 
     angle_command: AngleCommand = field(default_factory=AngleCommand)
     body_velocity_command: BodyVelocityCommand = field(default_factory=BodyVelocityCommand)
+    world_velocity_command: WorldVelocityCommand = field(default_factory=WorldVelocityCommand)
+    world_command_preprocess_config: WorldCommandPreprocessConfig = field(default_factory=WorldCommandPreprocessConfig)
+    une_to_control_plane_config: UneToControlPlaneConfig = field(default_factory=UneToControlPlaneConfig)
+    world_velocity_feedback_mode: str = "raw_body"
     outer_loop_config: AngleOuterLoopConfig = field(default_factory=AngleOuterLoopConfig)
     outer_loop: AngleOuterLoopOutput = field(default_factory=AngleOuterLoopOutput)
     yaw_outer_loop_config: YawOuterLoopConfig = field(default_factory=YawOuterLoopConfig)
     yaw_outer_loop: YawOuterLoopOutput = field(default_factory=YawOuterLoopOutput)
     body_velocity_outer_loop_config: BodyVelocityOuterLoopConfig = field(default_factory=BodyVelocityOuterLoopConfig)
     body_velocity_outer_loop: BodyVelocityOuterLoopOutput = field(default_factory=BodyVelocityOuterLoopOutput)
+    control_plane_velocity_debug: ControlPlaneVelocityDebug = field(default_factory=ControlPlaneVelocityDebug)
+    world_velocity_projection: WorldToBodyVelocityProjectionOutput = field(default_factory=WorldToBodyVelocityProjectionOutput)
     body_velocity_outer_loop_enabled: bool = False
     outer_loop_running: bool = False
 

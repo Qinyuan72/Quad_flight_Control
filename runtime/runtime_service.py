@@ -12,6 +12,9 @@ try:
         AngleOuterLoopConfig,
         BodyVelocityCommand,
         BodyVelocityOuterLoopConfig,
+        UneToControlPlaneConfig,
+        WorldCommandPreprocessConfig,
+        WorldVelocityCommand,
         RollRateTestCommand,
         RollRateTestState,
         YawOuterLoopConfig,
@@ -26,6 +29,9 @@ except ImportError:
         AngleOuterLoopConfig,
         BodyVelocityCommand,
         BodyVelocityOuterLoopConfig,
+        UneToControlPlaneConfig,
+        WorldCommandPreprocessConfig,
+        WorldVelocityCommand,
         RollRateTestCommand,
         RollRateTestState,
         YawOuterLoopConfig,
@@ -145,6 +151,18 @@ class RuntimeService:
     def set_body_velocity_command(self, command: BodyVelocityCommand) -> None:
         self._call_locked(self.core.set_body_velocity_command, command, persist=True)
 
+    def set_world_velocity_command(self, command: WorldVelocityCommand) -> None:
+        self._call_locked(self.core.set_world_velocity_command, command, persist=True)
+
+    def set_world_command_preprocess_config(self, config: WorldCommandPreprocessConfig) -> None:
+        self._call_locked(self.core.set_world_command_preprocess_config, config, persist=True)
+
+    def set_une_to_control_plane_config(self, config: UneToControlPlaneConfig) -> None:
+        self._call_locked(self.core.set_une_to_control_plane_config, config, persist=True)
+
+    def set_world_velocity_feedback_mode(self, mode: str) -> None:
+        self._call_locked(self.core.set_world_velocity_feedback_mode, mode, persist=True)
+
     def set_body_velocity_outer_loop_config(self, config: BodyVelocityOuterLoopConfig) -> None:
         self._call_locked(self.core.set_body_velocity_outer_loop_config, config, persist=True)
 
@@ -162,6 +180,12 @@ class RuntimeService:
 
     def stop_body_velocity_outer_loop(self) -> None:
         self._call_locked(self.core.stop_body_velocity_outer_loop)
+
+    def start_world_velocity_control(self) -> None:
+        self._call_locked(self.core.start_world_velocity_control)
+
+    def stop_world_velocity_control(self) -> None:
+        self._call_locked(self.core.stop_world_velocity_control)
 
     def set_altitude_command(self, altitude_command: AltitudeCommand) -> None:
         self._call_locked(self.core.set_altitude_command, altitude_command, persist=True)
@@ -252,6 +276,34 @@ class RuntimeService:
                 v_forward_cmd_m_s=float(body_velocity_command.get("v_forward_cmd_m_s", 0.0)),
                 v_right_cmd_m_s=float(body_velocity_command.get("v_right_cmd_m_s", 0.0)),
             )
+        )
+
+        world_velocity_command = settings.get("world_velocity_command", {})
+        self.core.set_world_velocity_command(
+            WorldVelocityCommand(
+                v_north_cmd_m_s=float(world_velocity_command.get("v_north_cmd_m_s", 0.0)),
+                v_east_cmd_m_s=float(world_velocity_command.get("v_east_cmd_m_s", 0.0)),
+            )
+        )
+
+        world_command_preprocess_config = settings.get("world_command_preprocess_config", {})
+        self.core.set_world_command_preprocess_config(
+            WorldCommandPreprocessConfig(
+                invert_world_north=bool(world_command_preprocess_config.get("invert_world_north", False)),
+                invert_world_east=bool(world_command_preprocess_config.get("invert_world_east", False)),
+            )
+        )
+
+        une_to_control_plane_config = settings.get("une_to_control_plane_config", {})
+        self.core.set_une_to_control_plane_config(
+            UneToControlPlaneConfig(
+                swap_ne=bool(une_to_control_plane_config.get("swap_ne", False)),
+                sign_x=float(une_to_control_plane_config.get("sign_x", 1.0)),
+                sign_y=float(une_to_control_plane_config.get("sign_y", 1.0)),
+            )
+        )
+        self.core.set_world_velocity_feedback_mode(
+            str(settings.get("world_velocity_feedback_mode", "raw_body"))
         )
 
         outer_config = settings.get("outer_config", {})
@@ -349,6 +401,20 @@ class RuntimeService:
                     "v_forward_cmd_m_s": snapshot.body_velocity_command.v_forward_cmd_m_s,
                     "v_right_cmd_m_s": snapshot.body_velocity_command.v_right_cmd_m_s,
                 },
+                "world_velocity_command": {
+                    "v_north_cmd_m_s": snapshot.world_velocity_command.v_north_cmd_m_s,
+                    "v_east_cmd_m_s": snapshot.world_velocity_command.v_east_cmd_m_s,
+                },
+                "world_command_preprocess_config": {
+                    "invert_world_north": snapshot.world_command_preprocess_config.invert_world_north,
+                    "invert_world_east": snapshot.world_command_preprocess_config.invert_world_east,
+                },
+                "une_to_control_plane_config": {
+                    "swap_ne": snapshot.une_to_control_plane_config.swap_ne,
+                    "sign_x": snapshot.une_to_control_plane_config.sign_x,
+                    "sign_y": snapshot.une_to_control_plane_config.sign_y,
+                },
+                "world_velocity_feedback_mode": snapshot.world_velocity_feedback_mode,
                 "outer_config": {
                     "kp_roll_angle": snapshot.outer_loop_config.kp_roll_angle,
                     "kp_pitch_angle": snapshot.outer_loop_config.kp_pitch_angle,

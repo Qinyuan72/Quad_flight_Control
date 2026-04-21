@@ -38,6 +38,20 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "v_forward_cmd_m_s": 0.0,
         "v_right_cmd_m_s": 0.0,
     },
+    "world_velocity_command": {
+        "v_north_cmd_m_s": 0.0,
+        "v_east_cmd_m_s": 0.0,
+    },
+    "world_command_preprocess_config": {
+        "invert_world_north": False,
+        "invert_world_east": False,
+    },
+    "une_to_control_plane_config": {
+        "swap_ne": False,
+        "sign_x": 1.0,
+        "sign_y": 1.0,
+    },
+    "world_velocity_feedback_mode": "raw_body",
     "outer_config": {
         "kp_roll_angle": -0.05,
         "kp_pitch_angle": -0.05,

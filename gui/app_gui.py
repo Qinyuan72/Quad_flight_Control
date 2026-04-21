@@ -11,8 +11,11 @@ try:
         AngleOuterLoopConfig,
         BodyVelocityCommand,
         BodyVelocityOuterLoopConfig,
+        UneToControlPlaneConfig,
         RPM_MAX,
         RollRateTestCommand,
+        WorldCommandPreprocessConfig,
+        WorldVelocityCommand,
         YawOuterLoopConfig,
     )
     from runtime.runtime_service import RuntimeService
@@ -24,8 +27,11 @@ except ImportError:
         AngleOuterLoopConfig,
         BodyVelocityCommand,
         BodyVelocityOuterLoopConfig,
+        UneToControlPlaneConfig,
         RPM_MAX,
         RollRateTestCommand,
+        WorldCommandPreprocessConfig,
+        WorldVelocityCommand,
         YawOuterLoopConfig,
     )
     from ..runtime.runtime_service import RuntimeService
@@ -53,6 +59,10 @@ class RollRateTestApp:
         startup_command = snapshot.command
         startup_outer_command = snapshot.angle_command
         startup_body_velocity_command = snapshot.body_velocity_command
+        startup_world_velocity_command = snapshot.world_velocity_command
+        startup_world_command_preprocess_config = getattr(snapshot, "world_command_preprocess_config", WorldCommandPreprocessConfig())
+        startup_une_to_control_plane_config = snapshot.une_to_control_plane_config
+        startup_world_velocity_feedback_mode = getattr(snapshot, "world_velocity_feedback_mode", "raw_body")
         startup_outer_config = snapshot.outer_loop_config
         startup_body_velocity_outer_config = snapshot.body_velocity_outer_loop_config
         startup_yaw_outer_config = snapshot.yaw_outer_loop_config
@@ -84,6 +94,14 @@ class RollRateTestApp:
         self.yaw_cmd_deg_var = tk.StringVar(value=f"{startup_outer_command.yaw_cmd_deg:.3f}")
         self.v_forward_cmd_var = tk.StringVar(value=f"{startup_body_velocity_command.v_forward_cmd_m_s:.3f}")
         self.v_right_cmd_var = tk.StringVar(value=f"{startup_body_velocity_command.v_right_cmd_m_s:.3f}")
+        self.v_north_cmd_var = tk.StringVar(value=f"{startup_world_velocity_command.v_north_cmd_m_s:.3f}")
+        self.v_east_cmd_var = tk.StringVar(value=f"{startup_world_velocity_command.v_east_cmd_m_s:.3f}")
+        self.invert_world_north_var = tk.BooleanVar(value=startup_world_command_preprocess_config.invert_world_north)
+        self.invert_world_east_var = tk.BooleanVar(value=startup_world_command_preprocess_config.invert_world_east)
+        self.swap_ne_var = tk.BooleanVar(value=startup_une_to_control_plane_config.swap_ne)
+        self.invert_x_var = tk.BooleanVar(value=startup_une_to_control_plane_config.sign_x < 0.0)
+        self.invert_y_var = tk.BooleanVar(value=startup_une_to_control_plane_config.sign_y < 0.0)
+        self.world_feedback_mode_var = tk.StringVar(value=startup_world_velocity_feedback_mode)
         self.kp_roll_angle_var = tk.StringVar(value=f"{startup_outer_config.kp_roll_angle:.3f}")
         self.kp_pitch_angle_var = tk.StringVar(value=f"{startup_outer_config.kp_pitch_angle:.3f}")
         self.ki_roll_angle_var = tk.StringVar(value=f"{startup_outer_config.ki_roll_angle:.3f}")
@@ -131,6 +149,26 @@ class RollRateTestApp:
             "vx_body_m_s": tk.StringVar(value="-"),
             "vy_body_m_s": tk.StringVar(value="-"),
             "vz_body_m_s": tk.StringVar(value="-"),
+            "v_up_une_m_s": tk.StringVar(value="-"),
+            "v_north_une_m_s": tk.StringVar(value="-"),
+            "v_east_une_m_s": tk.StringVar(value="-"),
+            "v_north_cmd_m_s": tk.StringVar(value="-"),
+            "v_east_cmd_m_s": tk.StringVar(value="-"),
+            "v_north_cmd_preprocessed_m_s": tk.StringVar(value="-"),
+            "v_east_cmd_preprocessed_m_s": tk.StringVar(value="-"),
+            "v_forward_cmd_projected_m_s": tk.StringVar(value="-"),
+            "v_right_cmd_projected_m_s": tk.StringVar(value="-"),
+            "vx_control_plane_cmd_m_s": tk.StringVar(value="-"),
+            "vy_control_plane_cmd_m_s": tk.StringVar(value="-"),
+            "vx_control_plane_meas_m_s": tk.StringVar(value="-"),
+            "vy_control_plane_meas_m_s": tk.StringVar(value="-"),
+            "vx_projected_une_meas_m_s": tk.StringVar(value="-"),
+            "vy_projected_une_meas_m_s": tk.StringVar(value="-"),
+            "vx_raw_body_meas_m_s": tk.StringVar(value="-"),
+            "vy_raw_body_meas_m_s": tk.StringVar(value="-"),
+            "world_feedback_mode": tk.StringVar(value="-"),
+            "v_forward_cmd_from_world_m_s": tk.StringVar(value="-"),
+            "v_right_cmd_from_world_m_s": tk.StringVar(value="-"),
             "dt_s": tk.StringVar(value="-"),
         }
         self.controller_vars = {
@@ -216,24 +254,69 @@ class RollRateTestApp:
         self._build_telemetry_panel(col1)
         self._build_mixer_panel(col4)
         self._build_actuator_panel(col4)
+        
     def _build_connection_controls(self, parent: ttk.Frame) -> None:
         frame = ttk.LabelFrame(parent, text="System", padding=8)
         frame.pack(fill="x", pady=4)
+
+        # Top toolbar
+        toolbar = ttk.Frame(frame)
+        toolbar.pack(fill="x", pady=(0, 8))
+
+        left_buttons = ttk.Frame(toolbar)
+        left_buttons.pack(side="left", fill="x", expand=True)
+
         for text, command in (
             ("Connect", self.connect),
             ("Disconnect", self.disconnect),
             ("Bind Tags", self.bind),
             ("Initialize", self.initialize),
-            ("Emergency Stop", self.emergency_stop),
         ):
-            ttk.Button(frame, text=text, command=command).pack(side="left", padx=3)
-        info = ttk.Frame(frame)
-        info.pack(fill="x", pady=(8, 0))
-        rows = [("Vessel", "vessel"), ("Initialized", "initialized"), ("Controller tags", "controller_tags"), ("Rotor tags", "rotor_tags")]
-        for idx, (label, key) in enumerate(rows):
-            ttk.Label(info, text=label).grid(row=idx, column=0, sticky="w", padx=(0, 10), pady=3)
-            ttk.Label(info, textvariable=self.binding_vars[key], font=gui_config.MONO_FONT).grid(row=idx, column=1, sticky="w", pady=3)
-        info.columnconfigure(1, weight=1)
+            ttk.Button(left_buttons, text=text, command=command).pack(side="left", padx=(0, 6))
+
+        # Keep emergency stop visually separated
+        ttk.Button(toolbar, text="Emergency Stop", command=self.emergency_stop).pack(side="right")
+
+        # Status summary row
+        summary = ttk.Frame(frame)
+        summary.pack(fill="x", pady=(0, 6))
+
+        ttk.Label(summary, text="Vessel:").grid(row=0, column=0, sticky="w", padx=(0, 6), pady=2)
+        ttk.Label(summary, textvariable=self.binding_vars["vessel"], font=gui_config.MONO_FONT).grid(
+            row=0, column=1, sticky="w", pady=2
+        )
+
+        ttk.Label(summary, text="Initialized:").grid(row=0, column=2, sticky="w", padx=(16, 6), pady=2)
+        ttk.Label(summary, textvariable=self.binding_vars["initialized"], font=gui_config.MONO_FONT).grid(
+            row=0, column=3, sticky="w", pady=2
+        )
+
+        summary.columnconfigure(1, weight=1)
+        summary.columnconfigure(3, weight=1)
+
+        # Detailed mapping row
+        details = ttk.Frame(frame)
+        details.pack(fill="x")
+
+        ttk.Label(details, text="Controller Tags:").grid(row=0, column=0, sticky="nw", padx=(0, 6), pady=2)
+        ttk.Label(
+            details,
+            textvariable=self.binding_vars["controller_tags"],
+            font=gui_config.MONO_FONT,
+            wraplength=320,
+            justify="left",
+        ).grid(row=0, column=1, sticky="w", pady=2)
+
+        ttk.Label(details, text="Rotor Tags:").grid(row=1, column=0, sticky="nw", padx=(0, 6), pady=2)
+        ttk.Label(
+            details,
+            textvariable=self.binding_vars["rotor_tags"],
+            font=gui_config.MONO_FONT,
+            wraplength=320,
+            justify="left",
+        ).grid(row=1, column=1, sticky="w", pady=2)
+
+        details.columnconfigure(1, weight=1)
 
     def _build_inner_loop_controls(self, parent: ttk.Frame) -> None:
         frame = ttk.LabelFrame(parent, text="Commands", padding=8)
@@ -410,6 +493,76 @@ class RollRateTestApp:
         velocity_info.columnconfigure(1, weight=1)
 
         # =========================
+        # World Velocity / Mapper
+        # =========================
+        world_velocity = ttk.LabelFrame(frame, text="World Velocity Control", padding=8)
+        world_velocity.pack(fill="x", pady=4)
+        world_velocity.columnconfigure(0, weight=1)
+
+        world_command = ttk.LabelFrame(world_velocity, text="World Velocity Command", padding=8)
+        world_command.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        self._entry_row(world_command, 0, "north cmd (m/s)", self.v_north_cmd_var)
+        self._entry_row(world_command, 1, "east cmd (m/s)", self.v_east_cmd_var)
+        world_command.columnconfigure(1, weight=1)
+        ttk.Button(
+            world_command,
+            text="Apply World Velocity",
+            command=self.apply_world_velocity_command,
+        ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(8, 0))
+
+        world_signs = ttk.LabelFrame(world_velocity, text="World Command Sign Fix", padding=8)
+        world_signs.grid(row=1, column=0, sticky="ew", pady=(0, 6))
+        ttk.Label(world_signs, text="Invert World North").grid(row=0, column=0, sticky="w", pady=4)
+        ttk.Checkbutton(world_signs, variable=self.invert_world_north_var).grid(row=0, column=1, sticky="w", pady=4)
+        ttk.Label(world_signs, text="Invert World East").grid(row=1, column=0, sticky="w", pady=4)
+        ttk.Checkbutton(world_signs, variable=self.invert_world_east_var).grid(row=1, column=1, sticky="w", pady=4)
+        ttk.Button(
+            world_signs,
+            text="Apply World Signs",
+            command=self.apply_world_command_preprocess_config,
+        ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(8, 0))
+
+        mapper = ttk.LabelFrame(world_velocity, text="UNE Mapper Config", padding=8)
+        mapper.grid(row=2, column=0, sticky="ew", pady=(0, 6))
+        ttk.Label(mapper, text="Swap N/E").grid(row=0, column=0, sticky="w", pady=4)
+        ttk.Checkbutton(mapper, variable=self.swap_ne_var).grid(row=0, column=1, sticky="w", pady=4)
+        ttk.Label(mapper, text="Invert X").grid(row=1, column=0, sticky="w", pady=4)
+        ttk.Checkbutton(mapper, variable=self.invert_x_var).grid(row=1, column=1, sticky="w", pady=4)
+        ttk.Label(mapper, text="Invert Y").grid(row=2, column=0, sticky="w", pady=4)
+        ttk.Checkbutton(mapper, variable=self.invert_y_var).grid(row=2, column=1, sticky="w", pady=4)
+        ttk.Button(
+            mapper,
+            text="Apply Mapper",
+            command=self.apply_mapper_config,
+        ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(8, 0))
+
+        lifecycle = ttk.LabelFrame(world_velocity, text="Control Lifecycle", padding=8)
+        lifecycle.grid(row=3, column=0, sticky="ew")
+        ttk.Label(lifecycle, text="World Feedback Mode").grid(row=0, column=0, sticky="w", padx=(0, 8), pady=(0, 6))
+        ttk.Combobox(
+            lifecycle,
+            textvariable=self.world_feedback_mode_var,
+            values=("projected_une", "raw_body"),
+            state="readonly",
+            width=18,
+        ).grid(row=0, column=1, sticky="w", pady=(0, 6))
+        ttk.Button(
+            lifecycle,
+            text="Apply Feedback Mode",
+            command=self.apply_world_feedback_mode,
+        ).grid(row=0, column=2, sticky="w", padx=(8, 0), pady=(0, 6))
+        ttk.Button(
+            lifecycle,
+            text="Start World Velocity Control",
+            command=self.start_world_velocity_control,
+        ).grid(row=1, column=0, sticky="w", padx=(0, 6))
+        ttk.Button(
+            lifecycle,
+            text="Stop World Velocity Control",
+            command=self.stop_world_velocity_control,
+        ).grid(row=1, column=1, sticky="w")
+
+        # =========================
         # Altitude Outer Loop
         # =========================
         altitude = ttk.LabelFrame(frame, text="Altitude Outer Loop", padding=8)
@@ -547,10 +700,59 @@ class RollRateTestApp:
                 ("v_forward", "vx_body_m_s"),
                 ("v_right", "vy_body_m_s"),
                 ("v_down", "vz_body_m_s"),
+                ("proj_v_forward", "v_forward_cmd_from_world_m_s"),
+                ("proj_v_right", "v_right_cmd_from_world_m_s"),
             ],
             value_suffix="",
             variable_group=self.telemetry_vars,
         )
+
+        debug_frame = ttk.LabelFrame(frame, text="UNE / Control Plane Debug", padding=8)
+        debug_frame.grid(row=3, column=0, columnspan=2, sticky="nsew", pady=4)
+
+        debug_left = ttk.Frame(debug_frame)
+        debug_left.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        self._label_rows(
+            debug_left,
+            [
+                ("world cmd north", "v_north_cmd_m_s"),
+                ("world cmd east", "v_east_cmd_m_s"),
+                ("cmd north pre", "v_north_cmd_preprocessed_m_s"),
+                ("cmd east pre", "v_east_cmd_preprocessed_m_s"),
+                ("cmd proj fwd", "v_forward_cmd_projected_m_s"),
+                ("cmd proj right", "v_right_cmd_projected_m_s"),
+                ("UNE meas north", "v_north_une_m_s"),
+                ("UNE meas east", "v_east_une_m_s"),
+            ],
+            value_suffix="",
+            variable_group=self.telemetry_vars,
+        )
+
+        debug_right = ttk.Frame(debug_frame)
+        debug_right.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
+        self._label_rows(
+            debug_right,
+            [
+                ("active mode", "world_feedback_mode"),
+                ("ctrl cmd x", "vx_control_plane_cmd_m_s"),
+                ("ctrl cmd y", "vy_control_plane_cmd_m_s"),
+                ("active meas x", "vx_control_plane_meas_m_s"),
+                ("active meas y", "vy_control_plane_meas_m_s"),
+                ("proj UNE x", "vx_projected_une_meas_m_s"),
+                ("proj UNE y", "vy_projected_une_meas_m_s"),
+                ("raw body x", "vx_raw_body_meas_m_s"),
+                ("raw body y", "vy_raw_body_meas_m_s"),
+            ],
+            value_suffix="",
+            variable_group=self.telemetry_vars,
+        )
+
+        debug_outputs = ttk.Frame(debug_frame)
+        debug_outputs.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        ttk.Label(debug_outputs, text="vel->pitch_cmd").grid(row=0, column=0, sticky="w", padx=(0, 8), pady=2)
+        ttk.Label(debug_outputs, textvariable=self.outer_loop_vars["pitch_cmd_from_velocity_deg"], font=gui_config.MONO_FONT).grid(row=0, column=1, sticky="w", pady=2)
+        ttk.Label(debug_outputs, text="vel->roll_cmd").grid(row=0, column=2, sticky="w", padx=(16, 8), pady=2)
+        ttk.Label(debug_outputs, textvariable=self.outer_loop_vars["roll_cmd_from_velocity_deg"], font=gui_config.MONO_FONT).grid(row=0, column=3, sticky="w", pady=2)
 
         body_rate_frame = ttk.LabelFrame(frame, text="Body Rates (FRD)", padding=8)
         body_rate_frame.grid(row=1, column=0, sticky="nsew", padx=(0, 4), pady=4)
@@ -707,11 +909,40 @@ class RollRateTestApp:
             v_forward_cmd_m_s=self._parse_float(self.v_forward_cmd_var.get()),
             v_right_cmd_m_s=self._parse_float(self.v_right_cmd_var.get()),
         ))
+        self.apply_velocity_outer_loop_gains()
+
+    def apply_velocity_outer_loop_gains(self) -> None:
         self.runtime.set_body_velocity_outer_loop_config(BodyVelocityOuterLoopConfig(
             kp_v_forward=self._parse_float(self.kp_v_forward_var.get()),
             kp_v_right=self._parse_float(self.kp_v_right_var.get()),
             velocity_angle_limit_deg=self._parse_float(self.velocity_angle_limit_var.get()),
         ))
+
+    def apply_world_velocity_command(self) -> None:
+        self.runtime.set_world_velocity_command(WorldVelocityCommand(
+            v_north_cmd_m_s=self._parse_float(self.v_north_cmd_var.get()),
+            v_east_cmd_m_s=self._parse_float(self.v_east_cmd_var.get()),
+        ))
+        self._render_snapshot(self.runtime.get_snapshot())
+
+    def apply_world_command_preprocess_config(self) -> None:
+        self.runtime.set_world_command_preprocess_config(WorldCommandPreprocessConfig(
+            invert_world_north=bool(self.invert_world_north_var.get()),
+            invert_world_east=bool(self.invert_world_east_var.get()),
+        ))
+        self._render_snapshot(self.runtime.get_snapshot())
+
+    def apply_mapper_config(self) -> None:
+        self.runtime.set_une_to_control_plane_config(UneToControlPlaneConfig(
+            swap_ne=bool(self.swap_ne_var.get()),
+            sign_x=-1.0 if self.invert_x_var.get() else 1.0,
+            sign_y=-1.0 if self.invert_y_var.get() else 1.0,
+        ))
+        self._render_snapshot(self.runtime.get_snapshot())
+
+    def apply_world_feedback_mode(self) -> None:
+        self.runtime.set_world_velocity_feedback_mode(self.world_feedback_mode_var.get())
+        self._render_snapshot(self.runtime.get_snapshot())
 
     def apply_altitude_outer_loop_parameters(self) -> None:
         self.runtime.set_altitude_command(AltitudeCommand(
@@ -769,6 +1000,19 @@ class RollRateTestApp:
     def stop_body_velocity_outer_loop(self) -> None:
         self._safe_action(self.runtime.stop_body_velocity_outer_loop)
 
+    def start_world_velocity_control(self) -> None:
+        def _start() -> None:
+            self.apply_velocity_outer_loop_gains()
+            self.apply_world_velocity_command()
+            self.apply_world_command_preprocess_config()
+            self.apply_mapper_config()
+            self.apply_world_feedback_mode()
+            self.runtime.start_world_velocity_control()
+        self._safe_action(_start)
+
+    def stop_world_velocity_control(self) -> None:
+        self._safe_action(self.runtime.stop_world_velocity_control)
+
     def start_altitude_loop(self) -> None:
         def _start() -> None:
             self.apply_altitude_outer_loop_parameters()
@@ -812,6 +1056,9 @@ class RollRateTestApp:
         command = getattr(snapshot, "command", None)
         outer_loop = getattr(snapshot, "outer_loop", None)
         body_velocity_outer_loop = getattr(snapshot, "body_velocity_outer_loop", None)
+        control_plane_velocity_debug = getattr(snapshot, "control_plane_velocity_debug", None)
+        world_velocity_command = getattr(snapshot, "world_velocity_command", None)
+        world_velocity_projection = getattr(snapshot, "world_velocity_projection", None)
         yaw_outer_loop = getattr(snapshot, "yaw_outer_loop", None)
         altitude_loop = getattr(snapshot, "altitude_loop", None)
         motor_command = getattr(snapshot, "motor_command", None)
@@ -837,9 +1084,29 @@ class RollRateTestApp:
         self.telemetry_vars["roll_rate_deg_s"].set(f"{getattr(telemetry, 'roll_rate_deg_s', 0.0):.3f}")
         self.telemetry_vars["pitch_rate_deg_s"].set(f"{getattr(telemetry, 'pitch_rate_deg_s', 0.0):.3f}")
         self.telemetry_vars["yaw_rate_deg_s"].set(f"{getattr(telemetry, 'yaw_rate_deg_s', 0.0):.3f}")
+        self.telemetry_vars["v_up_une_m_s"].set(f"{getattr(telemetry, 'v_up_une_m_s', 0.0):+.3f}")
+        self.telemetry_vars["v_north_une_m_s"].set(f"{getattr(telemetry, 'v_north_une_m_s', 0.0):+.3f}")
+        self.telemetry_vars["v_east_une_m_s"].set(f"{getattr(telemetry, 'v_east_une_m_s', 0.0):+.3f}")
         self.telemetry_vars["vx_body_m_s"].set(f"{getattr(telemetry, 'vx_body_m_s', 0.0):+.3f}")
         self.telemetry_vars["vy_body_m_s"].set(f"{getattr(telemetry, 'vy_body_m_s', 0.0):+.3f}")
         self.telemetry_vars["vz_body_m_s"].set(f"{getattr(telemetry, 'vz_body_m_s', 0.0):+.3f}")
+        self.telemetry_vars["v_north_cmd_m_s"].set(f"{getattr(world_velocity_command, 'v_north_cmd_m_s', 0.0):+.3f}")
+        self.telemetry_vars["v_east_cmd_m_s"].set(f"{getattr(world_velocity_command, 'v_east_cmd_m_s', 0.0):+.3f}")
+        self.telemetry_vars["v_north_cmd_preprocessed_m_s"].set(f"{getattr(control_plane_velocity_debug, 'v_north_cmd_preprocessed_m_s', 0.0):+.3f}")
+        self.telemetry_vars["v_east_cmd_preprocessed_m_s"].set(f"{getattr(control_plane_velocity_debug, 'v_east_cmd_preprocessed_m_s', 0.0):+.3f}")
+        self.telemetry_vars["v_forward_cmd_projected_m_s"].set(f"{getattr(control_plane_velocity_debug, 'v_forward_cmd_projected_m_s', 0.0):+.3f}")
+        self.telemetry_vars["v_right_cmd_projected_m_s"].set(f"{getattr(control_plane_velocity_debug, 'v_right_cmd_projected_m_s', 0.0):+.3f}")
+        self.telemetry_vars["world_feedback_mode"].set(getattr(control_plane_velocity_debug, "world_feedback_mode", getattr(snapshot, "world_velocity_feedback_mode", "-")))
+        self.telemetry_vars["vx_control_plane_cmd_m_s"].set(f"{getattr(control_plane_velocity_debug, 'vx_control_plane_cmd_m_s', 0.0):+.3f}")
+        self.telemetry_vars["vy_control_plane_cmd_m_s"].set(f"{getattr(control_plane_velocity_debug, 'vy_control_plane_cmd_m_s', 0.0):+.3f}")
+        self.telemetry_vars["vx_control_plane_meas_m_s"].set(f"{getattr(control_plane_velocity_debug, 'vx_control_plane_meas_m_s', 0.0):+.3f}")
+        self.telemetry_vars["vy_control_plane_meas_m_s"].set(f"{getattr(control_plane_velocity_debug, 'vy_control_plane_meas_m_s', 0.0):+.3f}")
+        self.telemetry_vars["vx_projected_une_meas_m_s"].set(f"{getattr(control_plane_velocity_debug, 'vx_projected_une_meas_m_s', 0.0):+.3f}")
+        self.telemetry_vars["vy_projected_une_meas_m_s"].set(f"{getattr(control_plane_velocity_debug, 'vy_projected_une_meas_m_s', 0.0):+.3f}")
+        self.telemetry_vars["vx_raw_body_meas_m_s"].set(f"{getattr(control_plane_velocity_debug, 'vx_raw_body_meas_m_s', 0.0):+.3f}")
+        self.telemetry_vars["vy_raw_body_meas_m_s"].set(f"{getattr(control_plane_velocity_debug, 'vy_raw_body_meas_m_s', 0.0):+.3f}")
+        self.telemetry_vars["v_forward_cmd_from_world_m_s"].set(f"{getattr(world_velocity_projection, 'v_forward_cmd_from_world_m_s', 0.0):+.3f}")
+        self.telemetry_vars["v_right_cmd_from_world_m_s"].set(f"{getattr(world_velocity_projection, 'v_right_cmd_from_world_m_s', 0.0):+.3f}")
         self.telemetry_vars["dt_s"].set(f"{getattr(telemetry, 'dt_s', 0.0):.4f}")
 
         self.outer_loop_vars["v_forward_error_m_s"].set(f"{getattr(body_velocity_outer_loop, 'v_forward_error_m_s', 0.0):.3f}")
